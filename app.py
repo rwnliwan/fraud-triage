@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.1.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,16 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v5.1 (rapi-rapi UI): sidebar kini mulai tertutup (di HP sidebar
+yang terbuka menekan konten utama sampai teks bertumpuk), dan tab
+Perjalanan Riset dirapikan — kotak alur tahapan memakai vonis SINGKAT
+(vonis lengkap tetap di bagian Detail), diagram skor diganti bar
+horizontal per tahap (bar lama bertumpuk sampai >100%), CSS responsif
+(di layar sempit kotak alur menumpuk vertikal penuh), metrik PR-AUC
+memakai container horizontal, dan ada heatmap Altair per kategori
+Tahap 2C vs 2D (target yang sembuh vs kategori yang regresi terlihat
+sekali pandang). Simulator ambang dicatat sebagai bahan v5.2.
 
 Baru di v5 (tab "🧪 Perjalanan Riset"): halaman dokumentasi riset yang
 menampilkan SETIAP tahap percobaan proyek ini — Tahap 0 (baseline &
@@ -62,13 +72,14 @@ from triage_core import TriageEngine, ZONES
 from rules import apply_rules_and_calm
 from journey import render_journey
 
-APP_VERSION = "v5"
+APP_VERSION = "v5.1"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
 
 st.set_page_config(page_title="Fraud Triage — Konsol Triase Smishing",
-                   page_icon="🛡️", layout="wide")
+                   page_icon="🛡️", layout="wide",
+                   initial_sidebar_state="collapsed")
 
 # ---------------------------------------------------------------------------
 # Gaya: tema "fraud ops console" (pelengkap .streamlit/config.toml)

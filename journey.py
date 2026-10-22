@@ -7,14 +7,21 @@ Angka dibaca dari `results.json` (dibangkitkan oleh gen_results.py dari
 ../id-train/eval_*.json + tabel perbandingan laporan tahap).
 
 Model triase yang live TIDAK berubah oleh halaman ini: tetap ensemble
-CHOSEN + rules Tahap 1. Modul ini hanya memakai streamlit + pandas +
-json (tanpa dependensi baru) dan bisa diuji tanpa app.py.
+CHOSEN + rules Tahap 1. Modul ini memakai streamlit + json, dan
+pandas + altair hanya untuk heatmap kategori (keduanya sudah jadi
+dependensi app — tanpa dependensi baru) dan bisa diuji tanpa app.py.
+
+v5.1: kotak alur memakai vonis singkat + CSS responsif (layar sempit =
+kotak menumpuk vertikal penuh), diagram skor diganti bar horizontal
+HTML per ukuran (bar chart dua seri lama menumpuk SAH+SMISHING >100%),
+metrik PR-AUC memakai container horizontal (anjuran docs Streamlit:
+lebih adaptif daripada columns), dan ada heatmap Altair per kategori
+Tahap 2C vs 2D dari `kategori_heatmap` di results.json.
 """
 
 import json
 import os
 
-import pandas as pd
 import streamlit as st
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -66,28 +73,123 @@ def _gerbang_lines(stage, gates):
     return lines
 
 
+# Vonis SINGKAT khusus kotak alur — vonis lengkap (panjang) hanya tampil
+# di bagian Detail per tahap, supaya kotak tidak sesak teks bertumpuk.
+_VONIS_SINGKAT = {
+    "0": "BASELINE",
+    "1": "DITERIMA — app v4",
+    "2c": "DITOLAK — gagal tipis",
+    "2d": "DITOLAK — 2/4 gerbang",
+}
+
+_CSS = """
+<style>
+.jr-flow {display:flex; flex-wrap:wrap; align-items:stretch; gap:0.4rem;}
+.jr-box {flex:1 1 170px; min-width:0; padding:0.85rem 0.95rem;
+  border-radius:12px; background:#111a2e; border:1px solid #2a3a5f;
+  overflow-wrap:break-word;}
+.jr-arrow {align-self:center; color:#8fa1c0; font-size:1.25rem;
+  padding:0 0.15rem;}
+.jr-bar-row {display:flex; align-items:center; gap:0.6rem;
+  margin:0.3rem 0;}
+.jr-bar-label {flex:0 0 11.5rem; color:#c6d0e4; font-size:0.85rem;
+  overflow-wrap:break-word;}
+.jr-bar-track {flex:1 1 auto; height:0.95rem; border-radius:6px;
+  background:#1a2742; overflow:hidden;}
+.jr-bar-fill {height:100%; border-radius:6px;}
+.jr-bar-val {flex:0 0 3.6rem; color:#f2f5fb; font-size:0.85rem;
+  font-weight:600;}
+@media (max-width: 700px) {
+  .jr-box {flex:1 1 100%;}
+  .jr-arrow {flex:1 1 100%; text-align:center; transform:rotate(90deg);
+    padding:0.1rem 0;}
+  .jr-bar-label {flex-basis:7.5rem; font-size:0.8rem;}
+}
+</style>
+"""
+
+
 def _flow_html(stages):
-    """Diagram alur tahapan: kotak bergaya .ft-card + panah, aksen vonis."""
+    """Diagram alur tahapan: kotak vonis singkat + panah, aksen vonis."""
     boxes = []
     for s in stages:
         warna = _WARNA.get(s["warna_vonis"], "#8fa1c0")
+        singkat = _VONIS_SINGKAT.get(s["id"], s["vonis"])
         boxes.append(
-            '<div style="flex:1 1 0; min-width:150px; padding:0.9rem 1rem; '
-            'border-radius:12px; background:#111a2e; '
-            f'border:1px solid #2a3a5f; border-top:4px solid {warna};">'
-            f'<div style="color:#8fa1c0; font-size:0.8rem;">'
+            f'<div class="jr-box" style="border-top:4px solid {warna};">'
+            f'<div style="color:#8fa1c0; font-size:0.78rem;">'
             f'TAHAP {s["id"].upper()} · {s["tanggal"]}</div>'
-            f'<div style="color:#f2f5fb; font-weight:700; margin:0.25rem 0;">'
-            f'{s["nama"]}</div>'
-            f'<div style="color:{warna}; font-size:0.85rem; font-weight:600;">'
-            f'{s["vonis"]}</div>'
+            f'<div style="color:#f2f5fb; font-weight:700; '
+            f'margin:0.25rem 0;">{s["nama"]}</div>'
+            f'<div style="color:{warna}; font-size:0.88rem; '
+            f'font-weight:700;">{singkat}</div>'
             f'<div style="color:#c6d0e4; font-size:0.85rem; '
             f'margin-top:0.4rem;">SAH {_fmt_pct(s["sah"])} · '
             f'SMISHING {_fmt_pct(s["smishing"])}</div></div>')
-    panah = ('<div style="align-self:center; color:#8fa1c0; '
-             'font-size:1.3rem; padding:0 0.3rem;">➜</div>')
-    return ('<div style="display:flex; flex-wrap:wrap; align-items:stretch; '
-            'gap:0.2rem;">' + panah.join(boxes) + "</div>")
+    panah = '<div class="jr-arrow">➜</div>'
+    return '<div class="jr-flow">' + panah.join(boxes) + "</div>"
+
+
+def _heatmap_chart(rows):
+    """Heatmap Altair: % lolos per kategori, Tahap 2C vs 2D.
+
+    Mengembalikan chart Altair, atau None bila altair tak tersedia /
+    data kosong — pemanggil menampilkan tabel sebagai cadangan.
+    """
+    if not rows:
+        return None
+    try:
+        import altair as alt
+        import pandas as pd
+    except Exception:
+        return None
+    # Altair 6 menolak list-of-dicts mentah sebagai `data` (harus
+    # DataFrame / Mapping) — bungkus jadi DataFrame lebih dulu.
+    data = pd.DataFrame([dict(r, teks=_fmt_pct(r["lolos"])) for r in rows])
+    label_order = list(dict.fromkeys(data["label"]))
+    base = alt.Chart(data).encode(
+        x=alt.X("tahap:N", title=None,
+                axis=alt.Axis(labelAngle=0, labelFontSize=12)),
+        y=alt.Y("label:N", title=None, sort=label_order,
+                axis=alt.Axis(labelFontSize=11)),
+        tooltip=[alt.Tooltip("kategori:N", title="Kategori"),
+                 alt.Tooltip("tahap:N", title="Tahap"),
+                 alt.Tooltip("teks:N", title="Lolos")],
+    )
+    rect = base.mark_rect(cornerRadius=3).encode(
+        color=alt.Color(
+            "lolos:Q",
+            scale=alt.Scale(domain=[50, 75, 100],
+                            range=["#ef4444", "#eab308", "#22c55e"]),
+            legend=alt.Legend(title="% lolos")))
+    text = base.mark_text(fontWeight="bold", fontSize=11).encode(
+        text="teks:N",
+        color=alt.condition(alt.datum.lolos >= 65,
+                            alt.value("#0b1220"), alt.value("#f8fafc")))
+    return (rect + text).properties(height=560)
+
+
+def _bars_html(stages, gates):
+    """Bar horizontal per tahap — SAH & SMISHING terpisah (tidak ditumpuk).
+
+    Bar lama (st.bar_chart dua seri) menumpuk kedua persen sampai >100%
+    dan sulit dibaca; di sini tiap ukuran punya bar sendiri, hijau bila
+    melewati gerbangnya, merah bila belum.
+    """
+    rows = []
+    for s in stages:
+        for kunci, label, gerbang in (
+                ("sah", "SAH", gates["sah"]),
+                ("smishing", "SMISHING", gates["smishing"])):
+            v = s[kunci]
+            warna = "#22c55e" if v >= gerbang else "#ef4444"
+            rows.append(
+                '<div class="jr-bar-row">'
+                f'<div class="jr-bar-label">Tahap {s["id"]} · {label}</div>'
+                f'<div class="jr-bar-track"><div class="jr-bar-fill" '
+                f'style="width:{v:.1f}%; background:{warna};"></div></div>'
+                f'<div class="jr-bar-val">{_fmt_pct(v)}</div></div>')
+    return "".join(rows)
 
 
 def render_journey():
@@ -95,6 +197,7 @@ def render_journey():
     gates = data["gates"]
     stages = data["stages"]
 
+    st.markdown(_CSS, unsafe_allow_html=True)
     st.markdown("### 🧪 Perjalanan Riset — semua tahap, termasuk yang ditolak")
     st.markdown(
         "Halaman ini mendokumentasikan **setiap percobaan** proyek Fraud "
@@ -116,14 +219,7 @@ def render_journey():
     st.markdown(_flow_html(stages), unsafe_allow_html=True)
 
     st.markdown("#### Skor gerbang per tahap (set hakim 300, full-stack)")
-    df = pd.DataFrame(
-        {
-            "SAH (%)": [s["sah"] for s in stages],
-            "SMISHING (%)": [s["smishing"] for s in stages],
-        },
-        index=[f"Tahap {s['id']}" for s in stages],
-    )
-    st.bar_chart(df)
+    st.markdown(_bars_html(stages, gates), unsafe_allow_html=True)
     st.caption(
         f"Gerbang: SAH ≥ {_fmt_pct(gates['sah'])} · SMISHING ≥ "
         f"{_fmt_pct(gates['smishing'])} · PR-AUC ≥ "
@@ -131,10 +227,24 @@ def render_journey():
         f"{gates['auto_close']}.")
 
     st.markdown("#### PR-AUC Inggris (UCI test) per tahap")
-    cols = st.columns(len(stages))
-    for col, s in zip(cols, stages):
-        col.metric(f"Tahap {s['id']}", _fmt_auc(s["uci_pr_auc"]),
-                   help=f"Gerbang ≥ {_fmt_auc(gates['uci_pr_auc'])}")
+    with st.container(horizontal=True):
+        for s in stages:
+            st.metric(f"Tahap {s['id']}", _fmt_auc(s["uci_pr_auc"]),
+                      help=f"Gerbang ≥ {_fmt_auc(gates['uci_pr_auc'])}")
+
+    st.markdown("#### Peta kategori — Tahap 2C vs 2D (full-stack)")
+    chart = _heatmap_chart(data.get("kategori_heatmap", []))
+    if chart is not None:
+        st.altair_chart(chart, use_container_width=True)
+    else:
+        st.dataframe(data.get("kategori_heatmap", []))
+    st.caption(
+        "Warna = persen pesan lolos per kategori (15 pesan per kategori). "
+        "Bandingkan kolom 2C → 2D: kategori yang ditargetkan data 2D "
+        "sembuh (keamanan_bank_resmi 60,0% → 93,3%; apk_malware 73,3% → "
+        "100%), tetapi beberapa kategori smishing non-target mundur "
+        "(mis. investasi_bodong 93,3% → 73,3%) — trade-off yang membuat "
+        "gerbang SMISHING 2D gagal.")
 
     st.markdown("#### Detail per tahap")
     for s in stages:

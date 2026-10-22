@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Pembangkit `results.json` untuk tab "🧪 Perjalanan Riset" (app v5).
+"""Pembangkit `results.json` untuk tab "🧪 Perjalanan Riset" (app v5;
+v5.1 menambah `kategori_heatmap` — per-kategori full-stack Tahap 2C
+dan 2D dari file evaluasi yang sama, untuk heatmap Altair).
 
 Sumber angka (file evaluasi terverifikasi di ../id-train/):
   - Tahap 1  : eval_smoke_current.json  (paket app live: model CHOSEN +
@@ -210,13 +212,38 @@ SUMBER = {
 }
 
 
+def _per_kategori(ev, tahap_label):
+    """Baris heatmap kategori untuk satu tahap (full-stack, lolos_final).
+
+    Urutan mengikuti urutan kategori di file evaluasi (SAH dulu, lalu
+    SMISHING) supaya heatmap mengelompok secara alami.
+    """
+    rows = []
+    for kat, v in ev["id300"]["per_kategori"].items():
+        grup, _, nama = kat.partition("/")
+        rows.append({
+            "kategori": kat,
+            "label": f"{grup.upper()} · {nama}",
+            "tahap": tahap_label,
+            "lolos": round(v["lolos_final"] * 100, 1),
+        })
+    return rows
+
+
 def main():
     stages = [TAHAP_0]
+    evs = {}
     for sid in ("1", "2c", "2d"):
-        m = _metrik(_load(SUMBER[sid]))
+        evs[sid] = _load(SUMBER[sid])
+        m = _metrik(evs[sid])
         stages.append({"id": sid, **m, **NARASI[sid]})
 
-    data = {"gates": GERBANG, "stages": stages}
+    # Heatmap kategori: hanya 2C vs 2D yang punya per-kategori lengkap
+    # dan memang itu perbandingan yang bercerita (target sembuh vs regresi).
+    heatmap = (_per_kategori(evs["2c"], "Tahap 2C")
+               + _per_kategori(evs["2d"], "Tahap 2D"))
+
+    data = {"gates": GERBANG, "stages": stages, "kategori_heatmap": heatmap}
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
 
