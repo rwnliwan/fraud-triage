@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.1.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.2.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,17 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v5.2 (sidebar ringkas + simulator ambang): sidebar tidak lagi
+menampilkan semua dokumentasi sebagai paragraf terbuka. Yang tampil
+langsung hanya kartu status model (CHOSEN, ambang, PR-AUC, mesin) dan
+satu peringatan keterbatasan terpenting; komposisi model, aturan &
+sinyal penenang, keterbatasan lengkap, benchmark, dan tautan dipindah
+ke satu dropdown "Lihat detail" — satu topik tampil pada satu waktu.
+Tab Evaluasi ID juga mendapat simulator ambang: skor panel 16 dihitung
+sekali, lalu slider t_close/t_esc menunjukkan dampak kebijakan secara
+langsung TANPA mengubah ambang live app. Panel 16 tetap set buatan
+kecil untuk transparansi, bukan benchmark.
 
 Baru di v5.1 (rapi-rapi UI): sidebar kini mulai tertutup (di HP sidebar
 yang terbuka menekan konten utama sampai teks bertumpuk), dan tab
@@ -72,7 +83,7 @@ from triage_core import TriageEngine, ZONES
 from rules import apply_rules_and_calm
 from journey import render_journey
 
-APP_VERSION = "v5.1"
+APP_VERSION = "v5.2"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -145,6 +156,57 @@ footer {visibility: hidden;}
 .ft-footer {
   text-align: center; color: #8fa1c0; font-size: 0.85rem;
   margin-top: 2.2rem;
+}
+/* Sidebar v5.2: panel status ringkas, bukan dinding dokumentasi. */
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+  padding-top: 1.1rem;
+}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+  gap: 0.65rem;
+}
+.ft-side-card {
+  padding: 0.95rem; border-radius: 12px;
+  background: linear-gradient(145deg, #111a2e 0%, #171126 100%);
+  border: 1px solid #2a3a5f;
+}
+.ft-side-kicker {
+  color: #8fa1c0; font-size: 0.68rem; font-weight: 700;
+  letter-spacing: 0.11em;
+}
+.ft-side-title {
+  color: #f2f5fb; font-size: 1.08rem; font-weight: 750;
+  line-height: 1.25; margin-top: 0.3rem;
+}
+.ft-side-status {
+  color: #86efac; font-size: 0.82rem; font-weight: 650;
+  margin-top: 0.3rem;
+}
+.ft-side-stats {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 0.45rem; margin-top: 0.75rem;
+}
+.ft-side-stat {
+  background: #0d1526; border: 1px solid #2a3a5f;
+  border-radius: 9px; padding: 0.5rem 0.55rem;
+}
+.ft-side-stat small {
+  display: block; color: #8fa1c0; font-size: 0.66rem;
+  font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+}
+.ft-side-stat strong {
+  color: #f2f5fb; font-size: 0.98rem; line-height: 1.35;
+}
+.ft-side-note {
+  color: #c6d0e4; font-size: 0.84rem; line-height: 1.45;
+  margin: 0.75rem 0 0 0;
+}
+.ft-side-alert {
+  padding: 0.7rem 0.75rem; border-radius: 10px;
+  background: #2b2110; border: 1px solid #a16207;
+  color: #fde68a; font-size: 0.84rem; line-height: 1.45;
+}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] label {
+  color: #c6d0e4; font-weight: 650;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -314,6 +376,64 @@ def _std_record(analysis):
         "signals": list(analysis["rule"]["active_signals"]),
         "calm_applied": bool(calm.get("lowered")),
         "calm_reasons": list(calm.get("reasons", [])),
+    }
+
+
+def _zone_from_score(p, t_close, t_esc):
+    """Band model dari skor dengan ambang simulasi (bukan ambang live)."""
+    if p < t_close:
+        return "AUTO-CLOSE"
+    if p >= t_esc:
+        return "ESKALASI"
+    return "REVIEW ANALIS"
+
+
+def _evaluate_thresholds(base_rows, t_close, t_esc):
+    """Terapkan ambang simulasi + lapisan aturan/penenang ke panel.
+
+    `base_rows` hanya membawa skor model yang sudah dihitung sekali;
+    fungsi ini tidak memanggil model lagi, jadi slider bisa bergerak
+    responsif. Aturan dan penenang tetap diterapkan persis seperti app
+    live, hanya band model awalnya berasal dari ambang simulasi.
+    """
+    rows = []
+    for base in base_rows:
+        model_zone = _zone_from_score(base["score"], t_close, t_esc)
+        final_zone, rule = apply_rules_and_calm(base["text"], model_zone)
+        if base["label"] == "SAH":
+            ok = final_zone in ("AUTO-CLOSE", "REVIEW ANALIS")
+        else:
+            ok = final_zone == "ESKALASI"
+        rows.append({
+            **base,
+            "model_zone": model_zone,
+            "final_zone": final_zone,
+            "rule_triggered": bool(rule["triggered"]),
+            "signals": list(rule["active_signals"]),
+            "calm_applied": bool(rule.get("calm", {}).get("lowered")),
+            "calm_reasons": list(rule.get("calm", {}).get("reasons", [])),
+            "ok": ok,
+        })
+    return rows
+
+
+def _threshold_summary(rows):
+    """Ringkasan panel untuk satu pilihan ambang."""
+    sah = [r for r in rows if r["label"] == "SAH"]
+    smishing = [r for r in rows if r["label"] == "SMISHING"]
+    return {
+        "sah_ok": sum(1 for r in sah if r["ok"]),
+        "sah_n": len(sah),
+        "smishing_ok": sum(1 for r in smishing if r["ok"]),
+        "smishing_n": len(smishing),
+        "total_ok": sum(1 for r in rows if r["ok"]),
+        "total_n": len(rows),
+        "smishing_auto_close": sum(
+            1 for r in smishing if r["final_zone"] == "AUTO-CLOSE"),
+        "zones": {
+            zone: sum(1 for r in rows if r["final_zone"] == zone)
+            for zone in ("AUTO-CLOSE", "REVIEW ANALIS", "ESKALASI")
+        },
     }
 
 
@@ -517,58 +637,125 @@ except Exception as exc:  # bobot BERT belum tersedia di lingkungan ini
     st.stop()
 
 # ---------------------------------------------------------------------------
-# Sidebar: info model
+# Sidebar v5.2: kartu status ringkas + dropdown detail
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.markdown("### ℹ️ Info model")
+    # Yang selalu tampil hanya status yang dibutuhkan untuk membaca app.
+    # Semua dokumentasi panjang tinggal di balik satu dropdown.
     st.markdown(
-        "**Ensemble (Top-3 Terkalibrasi)** — rata-rata probabilitas "
-        "terkalibrasi (temperature scaling) dari:\n"
-        "1. DistilBERT multilingual (fine-tune)\n"
-        "2. TF-IDF + Fitur Angka + Logistic Regression\n"
-        "3. TF-IDF + Logistic Regression\n\n"
-        f"**Ambang kebijakan:** t_close = {engine.t_close:.3f} · "
-        f"t_esc = {engine.t_esc:.3f}\n\n"
-        "**PR-AUC test: 0,986** (arena final notebook).\n\n"
-        "**Lapisan aturan:** kombinasi ≥ 2 sinyal kuat (tautan; permintaan "
-        "kredensial/bertindak lewat tautan; ancaman + urgensi) memaksa "
-        "band naik ke ESKALASI. Aturan tidak mengubah skor.\n\n"
-        "**Sinyal penenang (v4, Tahap 1):** pola resmi berformat sangat "
-        "jelas — format OTP standar tanpa tautan, tautan hanya ke domain "
-        "resmi persis, atau notifikasi transaksi terstruktur tanpa "
-        "tautan — boleh menurunkan band ESKALASI model **satu tingkat** "
-        "ke REVIEW ANALIS. Penenang **tidak pernah** menghasilkan "
-        "AUTO-CLOSE dan **gugur total** bila sinyal kuat S2/S3 aktif "
-        "atau aturan terpicu. Batasnya jujur: ia hanya menolong pola "
-        "berformat jelas; over-eskalasi model pada teks Indonesia bebas "
-        "tetap ada sampai model di-fine-tune ulang (Tahap 2)."
-    )
-    st.markdown("### ⚠️ Keterbatasan (jujur)")
-    st.markdown(
-        "Data latih adalah **UCI SMS Spam Collection** — SMS Inggris "
-        "±2011. Pola smishing Indonesia modern berada **di luar "
-        "distribusi** itu (korpus mini ID di notebook menunjukkan drift "
-        "besar), jadi perlakukan skor sebagai **perangkingan triase** "
-        "untuk antrean manusia, bukan vonis akhir. Skor adalah "
-        "probabilitas terkalibrasi — nilainya memang jarang mendekati "
-        "0 atau 1. Model ini artefak pembelajaran terpimpin, bukan "
-        "sistem produksi bank."
+        f"""
+        <div class="ft-side-card">
+          <div class="ft-side-kicker">MODEL OPERASIONAL</div>
+          <div class="ft-side-title">Ensemble Top-3 Terkalibrasi</div>
+          <div class="ft-side-status">● CHOSEN · app {APP_VERSION}</div>
+          <div class="ft-side-stats">
+            <div class="ft-side-stat">
+              <small>t_close</small><strong>{engine.t_close:.3f}</strong>
+            </div>
+            <div class="ft-side-stat">
+              <small>t_esc</small><strong>{engine.t_esc:.3f}</strong>
+            </div>
+            <div class="ft-side-stat">
+              <small>PR-AUC test</small><strong>0,986</strong>
+            </div>
+            <div class="ft-side-stat">
+              <small>Mesin</small><strong>fp32</strong>
+            </div>
+          </div>
+          <p class="ft-side-note">Skor adalah <b>perangkingan triase</b>
+          untuk antrean manusia — bukan vonis akhir.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
     st.markdown(
-        "**Tautan:** [Repo GitHub]"
-        "(https://github.com/rwnliwan/fraud-triage) · "
-        "[Model Hugging Face]"
-        "(https://huggingface.co/rwnliwan/fraud-triage-smishing) · "
-        "Detail metode, benchmark semua kandidat & vonis: notebook "
-        "proyek `fraud-triage-laya-vs-ml-dl.ipynb`."
+        '<div class="ft-side-alert">⚠️ <b>Penting:</b> data latih utama '
+        'adalah SMS Inggris ±2011. Pola smishing Indonesia modern '
+        'berada di luar distribusi itu.</div>',
+        unsafe_allow_html=True,
     )
-    with st.expander("Benchmark arena (test, PR-AUC)"):
-        df_b = pd.DataFrame(BENCHMARK, columns=[
-            "Model", "PR-AUC", "Recall@FPR1%", "ECE kalibrasi"])
-        st.dataframe(df_b, hide_index=True)
-    st.caption(f"Bobot DistilBERT dimuat dari: {engine.bert_source}")
-    st.caption(f"Versi app: {APP_VERSION} · Mesin: fp32 (uji float16 "
-               f"tidak diadopsi — lihat README)")
+
+    sidebar_detail = st.selectbox(
+        "Lihat detail",
+        [
+            "Komposisi model",
+            "Aturan & sinyal penenang",
+            "Keterbatasan",
+            "Benchmark arena",
+            "Tautan & sumber",
+        ],
+        index=None,
+        placeholder="Pilih detail…",
+        key="sidebar_detail",
+    )
+
+    if sidebar_detail == "Komposisi model":
+        with st.container(border=True):
+            st.markdown(
+                "**Ensemble (Top-3 Terkalibrasi)** adalah rata-rata "
+                "probabilitas terkalibrasi (temperature scaling) dari:\n"
+                "1. DistilBERT multilingual (fine-tune)\n"
+                "2. TF-IDF + Fitur Angka + Logistic Regression\n"
+                "3. TF-IDF + Logistic Regression\n\n"
+                f"Kebijakan live memakai **t_close = "
+                f"{engine.t_close:.3f}** dan **t_esc = "
+                f"{engine.t_esc:.3f}**. PR-AUC test ensemble adalah "
+                "**0,986** pada arena final notebook."
+            )
+    elif sidebar_detail == "Aturan & sinyal penenang":
+        with st.container(border=True):
+            st.markdown(
+                "**Lapisan aturan (hanya menaikkan):** kombinasi ≥ 2 "
+                "sinyal kuat — tautan; permintaan kredensial/bertindak "
+                "lewat tautan; ancaman + urgensi — memaksa band naik ke "
+                "ESKALASI. Aturan tidak mengubah skor.\n\n"
+                "**Sinyal penenang (v4, Tahap 1):** pola resmi "
+                "berformat sangat jelas boleh menurunkan band ESKALASI "
+                "model **satu tingkat** ke REVIEW ANALIS. Penenang "
+                "**tidak pernah** menghasilkan AUTO-CLOSE dan **gugur "
+                "total** bila sinyal kuat S2/S3 aktif atau aturan "
+                "terpicu.\n\n"
+                "Batasnya jujur: penenang hanya menolong pola "
+                "berformat jelas; over-eskalasi model pada teks "
+                "Indonesia bebas tetap menjadi keterbatasan model."
+            )
+    elif sidebar_detail == "Keterbatasan":
+        with st.container(border=True):
+            st.markdown(
+                "Data latih adalah **UCI SMS Spam Collection** — SMS "
+                "Inggris ±2011. Pola smishing Indonesia modern berada "
+                "**di luar distribusi** itu (korpus mini ID di "
+                "notebook menunjukkan drift besar), jadi perlakukan "
+                "skor sebagai **perangkingan triase** untuk antrean "
+                "manusia, bukan vonis akhir.\n\n"
+                "Skor adalah probabilitas terkalibrasi — nilainya "
+                "memang jarang mendekati 0 atau 1. Model ini artefak "
+                "pembelajaran terpimpin, bukan sistem produksi bank."
+            )
+    elif sidebar_detail == "Benchmark arena":
+        with st.container(border=True):
+            df_b = pd.DataFrame(BENCHMARK, columns=[
+                "Model", "PR-AUC", "Recall@FPR1%", "ECE kalibrasi"])
+            st.dataframe(df_b, hide_index=True)
+    elif sidebar_detail == "Tautan & sumber":
+        with st.container(border=True):
+            st.link_button(
+                "Repo GitHub",
+                "https://github.com/rwnliwan/fraud-triage",
+                use_container_width=True,
+            )
+            st.link_button(
+                "Model Hugging Face",
+                "https://huggingface.co/rwnliwan/fraud-triage-smishing",
+                use_container_width=True,
+            )
+            st.caption(
+                "Detail metode, benchmark semua kandidat & vonis ada "
+                "di notebook proyek "
+                "`fraud-triage-laya-vs-ml-dl.ipynb`."
+            )
+            st.caption(f"Bobot DistilBERT dimuat dari: "
+                       f"{engine.bert_source}")
 
 for _key in ("history", "feedback"):
     if _key not in st.session_state:
@@ -921,6 +1108,145 @@ with tab_eval:
                 "Semua sesuai **pada set buatan kecil ini saja** — "
                 "bukan bukti performa dunia nyata.")
         st.markdown("  \n".join(concl))
+
+    # -- Simulator ambang (v5.2) -------------------------------------------
+    st.markdown("---")
+    st.markdown("### 🎚️ Simulator ambang")
+    st.markdown(
+        "Geser ambang untuk melihat **apa yang akan berubah pada panel "
+        "16 ini** bila kebijakan memakai t_close / t_esc lain. Skor "
+        "model dihitung sekali; lapisan aturan dan sinyal penenang "
+        "tetap diterapkan. **Ambang live app tidak berubah**, dan panel "
+        "buatan kecil ini tetap **bukan benchmark** — alat ini hanya "
+        "membuat trade-off kebijakan terlihat."
+    )
+
+    if "threshold_sim_base" not in st.session_state:
+        st.info(
+            "Skor panel belum dimuat untuk simulator. Klik tombol "
+            "berikut untuk menghitung 16 skor model sekali saja; "
+            "sesudah itu slider dapat digeser tanpa memanggil model "
+            "lagi."
+        )
+        if st.button("🧮 Muat skor panel untuk simulator",
+                     key="btn_load_threshold_sim"):
+            progress = st.progress(
+                0, text="Menghitung skor panel 0 dari "
+                        f"{len(ID_EVAL_SET)} pesan…")
+            base_rows = []
+            for i, item in enumerate(ID_EVAL_SET):
+                res = engine.triage(item["text"])
+                base_rows.append({
+                    "text": item["text"],
+                    "label": item["label"],
+                    "kategori": item["kategori"],
+                    "score": float(res["p_scam"]),
+                })
+                progress.progress(
+                    (i + 1) / len(ID_EVAL_SET),
+                    text=f"Menghitung skor panel {i + 1} dari "
+                         f"{len(ID_EVAL_SET)} pesan…")
+            progress.empty()
+            st.session_state["threshold_sim_base"] = base_rows
+            st.rerun()
+
+    sim_base = st.session_state.get("threshold_sim_base")
+    if sim_base:
+        with st.container(border=True):
+            c_close, c_esc = st.columns(2)
+            sim_close = c_close.slider(
+                "t_close simulasi",
+                min_value=0.000,
+                max_value=0.500,
+                value=float(engine.t_close),
+                step=0.005,
+                format="%.3f",
+                key="sim_t_close",
+                help="Di bawah ambang ini band model menjadi AUTO-CLOSE.",
+            )
+            sim_esc = c_esc.slider(
+                "t_esc simulasi",
+                min_value=0.010,
+                max_value=0.900,
+                value=float(engine.t_esc),
+                step=0.005,
+                format="%.3f",
+                key="sim_t_esc",
+                help="Di atas ambang ini band model menjadi ESKALASI.",
+            )
+
+            if sim_close >= sim_esc:
+                st.error(
+                    "t_close harus lebih kecil daripada t_esc agar "
+                    "zona REVIEW ANALIS tetap ada. Geser salah satu "
+                    "slider."
+                )
+            else:
+                live_rows = _evaluate_thresholds(
+                    sim_base, engine.t_close, engine.t_esc)
+                sim_rows = _evaluate_thresholds(
+                    sim_base, sim_close, sim_esc)
+                live_sum = _threshold_summary(live_rows)
+                sim_sum = _threshold_summary(sim_rows)
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric(
+                    "SAH sesuai",
+                    f"{sim_sum['sah_ok']}/{sim_sum['sah_n']}",
+                    delta=sim_sum["sah_ok"] - live_sum["sah_ok"],
+                )
+                m2.metric(
+                    "SMISHING sesuai",
+                    f"{sim_sum['smishing_ok']}/{sim_sum['smishing_n']}",
+                    delta=sim_sum["smishing_ok"] - live_sum["smishing_ok"],
+                )
+                m3.metric(
+                    "Total sesuai",
+                    f"{sim_sum['total_ok']}/{sim_sum['total_n']}",
+                    delta=sim_sum["total_ok"] - live_sum["total_ok"],
+                )
+                m4.metric(
+                    "SMISHING → AUTO-CLOSE",
+                    sim_sum["smishing_auto_close"],
+                    delta=(sim_sum["smishing_auto_close"]
+                           - live_sum["smishing_auto_close"]),
+                    delta_color="inverse",
+                )
+                st.caption(
+                    f"Perbandingan terhadap ambang live "
+                    f"(t_close {engine.t_close:.3f} · t_esc "
+                    f"{engine.t_esc:.3f}): total live "
+                    f"{live_sum['total_ok']}/{live_sum['total_n']}; "
+                    f"distribusi final simulasi — AUTO-CLOSE "
+                    f"{sim_sum['zones']['AUTO-CLOSE']}, REVIEW ANALIS "
+                    f"{sim_sum['zones']['REVIEW ANALIS']}, ESKALASI "
+                    f"{sim_sum['zones']['ESKALASI']}. Delta metrik "
+                    f"dihitung terhadap live; khusus AUTO-CLOSE "
+                    f"smishing, naik berarti lebih buruk."
+                )
+                if sim_sum["smishing_auto_close"]:
+                    st.warning(
+                        "⚠️ Pilihan ambang ini membuat "
+                        f"{sim_sum['smishing_auto_close']} pesan "
+                        "SMISHING pada panel berakhir di AUTO-CLOSE — "
+                        "persis risiko yang membuat gerbang Tahap 2D "
+                        "gagal. Kesesuaian total tidak boleh dibaca "
+                        "tanpa angka ini."
+                    )
+
+                with st.expander("Lihat dampak per pesan"):
+                    df_sim = pd.DataFrame([{
+                        "Pesan": _short(r["text"], 70),
+                        "Kategori": r["kategori"],
+                        "Label": r["label"],
+                        "Skor": round(r["score"], 3),
+                        "Band model simulasi": r["model_zone"],
+                        "Band final simulasi": r["final_zone"],
+                        "Aturan": "Ya" if r["rule_triggered"] else "Tidak",
+                        "Penenang": "Ya" if r["calm_applied"] else "Tidak",
+                        "Status": "✅ Sesuai" if r["ok"] else "❌ Tidak sesuai",
+                    } for r in sim_rows])
+                    st.dataframe(df_sim, hide_index=True)
 
 # ---------------------------------------------------------------------------
 # Tab 4 — perjalanan riset (v5): dokumentasi semua tahap percobaan,
