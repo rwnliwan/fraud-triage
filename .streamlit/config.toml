@@ -1,0 +1,12 @@
+# Fraud Triage — tema "fraud ops console": gelap elegan, aksen amber,
+# kartu band memakai warna semantik sendiri (hijau/kuning/merah) via CSS app.
+[theme]
+base = "dark"
+primaryColor = "#F5A623"
+backgroundColor = "#0B1120"
+secondaryBackgroundColor = "#141C30"
+textColor = "#E8EDF7"
+font = "sans serif"
+
+[server]
+headless = true

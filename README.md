@@ -5,8 +5,40 @@ Terkalibrasi)** dengan kebijakan dua ambang operasional **t_close = 0,010**
 dan **t_esc = 0,135** (Bagian 10 notebook `fraud-triage-laya-vs-ml-dl.ipynb`).
 
 Pengguna menempel teks SMS → app menampilkan probabilitas scam terkalibrasi,
-keputusan triase (Tutup Otomatis / Review Analis / Eskalasi), skor per
-anggota ensemble, dan penjelasan faktor teks (kata pendorong + fitur angka).
+keputusan triase (AMAN / Review Analis / Eskalasi) pada kartu hasil berwarna
+dengan bilah skor visual terhadap kedua ambang, skor per anggota ensemble,
+penjelasan faktor teks (kata pendorong + fitur angka), **panel sinyal** yang
+terdeteksi dari teks, dan **lapisan aturan** keamanan di atas model.
+
+Fitur app: analisis tunggal dengan contoh siap-klik (termasuk contoh OTP
+bank asli), **mode batch** (satu pesan per baris → tabel + ringkasan per
+band), **riwayat sesi**, dan sidebar info model dengan keterbatasan yang
+jujur. Tema gelap "fraud ops console" diatur di `.streamlit/config.toml`
+plus CSS kustom di `app.py`.
+
+## Lapisan aturan (rules layer)
+
+Di atas skor model ada lapisan aturan deterministik (`rules.py`, murni
+regex, tanpa dependensi ML) yang dirancang konservatif:
+
+- **Kombinasi, bukan kata tunggal.** Tiga sinyal kuat: **S1** ada tautan
+  (URL) — terutama pemendek/domain tak resmi; **S2** permintaan memasukkan
+  OTP/PIN/kredensial atau bertindak lewat tautan; **S3** ancaman
+  blokir/suspensi/hangus **disertai** urgensi waktu. Aturan terpicu hanya
+  bila **≥ 2 sinyal kuat hadir bersamaan**.
+- **Hanya menaikkan.** Bila terpicu, band final dipaksa ke ESKALASI berapa
+  pun skor modelnya. Aturan **tidak pernah menurunkan** band dan **tidak
+  mengubah skor** — pesan yang model anggap berisiko tidak bisa ditutup
+  oleh aturan.
+- **Tidak salah tembak ke pesan sah.** Kalimat pelindung khas bank
+  ("JANGAN bagikan/berikan kode ini kepada siapa pun") secara eksplisit
+  bukan sinyal S2: kata kerja meminta-masukkan tidak mencakup
+  "berikan/bagikan", dan kecocokan yang didahului "jangan" dibuang.
+  Contoh "🏦 OTP bank asli (ID)" di app mendemonstrasikan ini: aturannya
+  diam; apa pun band-nya datang murni dari model.
+- **Transparan.** Bila aturan menaikkan band, kartu hasil menampilkan
+  lencana "Aturan terpicu" berisi sinyal-sinyalnya; panel sinyal selalu
+  menampilkan hitungan sinyal kuat yang aktif.
 
 ---
 
@@ -14,8 +46,10 @@ anggota ensemble, dan penjelasan faktor teks (kata pendorong + fitur angka).
 
 | Berkas | Fungsi |
 |---|---|
-| `app.py` | Antarmuka Streamlit (Bahasa Indonesia, istilah teknis English) |
+| `app.py` | Antarmuka Streamlit (Bahasa Indonesia, istilah teknis English): analisis tunggal, mode batch, riwayat sesi, panel sinyal, bilah skor |
 | `triage_core.py` | Logika model murni (tanpa Streamlit): ensemble, kalibrasi temperatur, kebijakan dua ambang, penjelasan faktor |
+| `rules.py` | Lapisan aturan murni regex (tanpa Streamlit): deteksi sinyal teks + aturan kombinasi ≥2 sinyal kuat yang memaksa ESKALASI (hanya menaikkan) |
+| `.streamlit/config.toml` | Tema gelap "fraud ops console" (warna dasar, aksen amber) |
 | `build_artifacts.py` | Skrip pembangunan artefak deploy dari resep notebook + verifikasi angka (sudah dijalankan; jalankan ulang hanya bila resep berubah) |
 | `requirements.txt` | Dependensi (torch diarahkan ke wheel CPU) |
 | `model/ensemble_spec.json` | Spesifikasi ensemble: anggota, temperatur per anggota, ambang kebijakan (salinan lokal; di cloud diunduh dari Hugging Face) |
@@ -85,8 +119,9 @@ jadi deploy tidak lagi butuh penempatan bobot manual.
 ### Langkah 1 — Repo GitHub
 
 Repo GitHub berisi isi folder `streamlit-app/` ini sebagai root
-(`app.py`, `triage_core.py`, `build_artifacts.py`, `requirements.txt`,
-`README.md`, `model/ensemble_spec.json`). Berkas biner
+(`app.py`, `triage_core.py`, `rules.py`, `build_artifacts.py`,
+`requirements.txt`, `README.md`, `.streamlit/config.toml`,
+`model/ensemble_spec.json`). Berkas biner
 (`sklearn_members.joblib`, bobot BERT) **sengaja tidak** ikut repo —
 app mengunduhnya dari Hugging Face saat pertama jalan.
 
