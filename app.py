@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.2.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.2.1.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,11 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v5.2.1 (patch spasi sidebar): kartu status, kotak peringatan,
+dan dropdown detail kini dipisahkan margin eksplisit (0,9rem) — di
+v5.2 ketiganya menempel karena jarak antarblok Streamlit tidak cukup
+memberi napas visual.
 
 Baru di v5.2 (sidebar ringkas + simulator ambang): sidebar tidak lagi
 menampilkan semua dokumentasi sebagai paragraf terbuka. Yang tampil
@@ -83,7 +88,7 @@ from triage_core import TriageEngine, ZONES
 from rules import apply_rules_and_calm
 from journey import render_journey
 
-APP_VERSION = "v5.2"
+APP_VERSION = "v5.2.1"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -165,7 +170,7 @@ footer {visibility: hidden;}
   gap: 0.65rem;
 }
 .ft-side-card {
-  padding: 0.95rem; border-radius: 12px;
+  padding: 0.95rem; border-radius: 12px; margin-bottom: 0.9rem;
   background: linear-gradient(145deg, #111a2e 0%, #171126 100%);
   border: 1px solid #2a3a5f;
 }
@@ -201,12 +206,19 @@ footer {visibility: hidden;}
   margin: 0.75rem 0 0 0;
 }
 .ft-side-alert {
-  padding: 0.7rem 0.75rem; border-radius: 10px;
+  padding: 0.7rem 0.75rem; border-radius: 10px; margin-bottom: 0.9rem;
   background: #2b2110; border: 1px solid #a16207;
   color: #fde68a; font-size: 0.84rem; line-height: 1.45;
 }
+[data-testid="stSidebar"] [data-testid="stSelectbox"] {
+  margin-top: 0.1rem;
+}
 [data-testid="stSidebar"] [data-testid="stSelectbox"] label {
-  color: #c6d0e4; font-weight: 650;
+  color: #c6d0e4; font-weight: 650; margin-bottom: 0.3rem;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"],
+[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] {
+  margin-top: 0.15rem;
 }
 </style>
 """, unsafe_allow_html=True)
