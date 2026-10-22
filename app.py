@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v4.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,16 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v5 (tab "🧪 Perjalanan Riset"): halaman dokumentasi riset yang
+menampilkan SETIAP tahap percobaan proyek ini — Tahap 0 (baseline &
+diagnosis), Tahap 1 (sinyal penenang), Tahap 2 (fine-tune dwibahasa),
+dan loop perbaikan 2D — lengkap dengan diagram skor gerbang dan vonis
+apa adanya, termasuk dua paket yang DITOLAK (2C gagal tipis; 2D lolos
+2 dari 4 gerbang). Model yang berjalan TIDAK berubah: tetap ensemble
+CHOSEN + rules Tahap 1. Angka di halaman itu dibaca dari results.json
+yang dibangkitkan dari file evaluasi terverifikasi (gen_results.py);
+logika halamannya ada di journey.py.
 
 Baru di v4 (Tahap 1 perbaikan Indonesia — SINYAL PENENANG): baseline set
 evaluasi Indonesia v1 (300 pesan berlabel) membuktikan model mengeskalasi
@@ -50,8 +60,9 @@ import streamlit as st
 
 from triage_core import TriageEngine, ZONES
 from rules import apply_rules_and_calm
+from journey import render_journey
 
-APP_VERSION = "v4"
+APP_VERSION = "v5"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -552,8 +563,9 @@ for _key in ("history", "feedback"):
     if _key not in st.session_state:
         st.session_state[_key] = []
 
-tab_single, tab_batch, tab_eval = st.tabs(
-    ["🔎 Analisis Tunggal", "🗂️ Mode Batch", "🇮🇩 Evaluasi ID"])
+tab_single, tab_batch, tab_eval, tab_journey = st.tabs(
+    ["🔎 Analisis Tunggal", "🗂️ Mode Batch", "🇮🇩 Evaluasi ID",
+     "🧪 Perjalanan Riset"])
 
 # ---------------------------------------------------------------------------
 # Tab 1 — analisis tunggal
@@ -898,6 +910,13 @@ with tab_eval:
                 "Semua sesuai **pada set buatan kecil ini saja** — "
                 "bukan bukti performa dunia nyata.")
         st.markdown("  \n".join(concl))
+
+# ---------------------------------------------------------------------------
+# Tab 4 — perjalanan riset (v5): dokumentasi semua tahap percobaan,
+# termasuk yang ditolak; model live tidak berubah.
+# ---------------------------------------------------------------------------
+with tab_journey:
+    render_journey()
 
 # ---------------------------------------------------------------------------
 # Footer (butir G)

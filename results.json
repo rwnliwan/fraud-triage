@@ -1,0 +1,82 @@
+{
+ "gates": {
+  "sah": 85,
+  "smishing": 95,
+  "uci_pr_auc": 0.98,
+  "auto_close": 0
+ },
+ "stages": [
+  {
+   "id": "0",
+   "nama": "Baseline & diagnosis",
+   "tanggal": "2026-10-22",
+   "sah": 16.0,
+   "smishing": 87.3,
+   "total": 51.7,
+   "auto_close": 0,
+   "uci_pr_auc": 0.986,
+   "panel_sah": 12.5,
+   "panel_smishing": 100.0,
+   "vonis": "BASELINE — titik berangkat; penyakit terdiagnosis, bukan kandidat pengganti model",
+   "warna_vonis": "netral",
+   "hipotesis": "Model CHOSEN (ensemble Top-3 terkalibrasi yang dilatih pada SMS Inggris UCI ±2011) cukup baik untuk triase SMS Indonesia, karena pola smishing dianggap bersifat lintas bahasa.",
+   "metode": "Dibangun set hakim Indonesia: 300 pesan berlabel (150 SAH / 150 SMISHING, 20 kategori) yang tidak pernah dipakai melatih model. Model live dinilai apa adanya pada set itu. Gerbang klaim ditetapkan di muka: SAH ≥ 85%, SMISHING ≥ 95%, PR-AUC UCI ≥ 0,98, smishing AUTO-CLOSE = 0.",
+   "hasil": "SAH hanya 16,0% — 84% pesan sah Indonesia dieskalasi; median skor SAH (0,471) bahkan lebih tinggi dari SMISHING (0,402). SMISHING 87,3%, total 51,7%, smishing AUTO-CLOSE 0, dan PR-AUC Inggris tetap 0,986.",
+   "pelajaran": "Penyakitnya bukan model yang lemah, melainkan register: pesan resmi formal-institusional Indonesia tidak pernah ada di data latih Inggris, sehingga pesan yang 'terdengar resmi' terbaca sebagai mencurigakan. Perbaikan harus menyentuh data dan representasi bahasa Indonesia — bukan sekadar menggeser ambang."
+  },
+  {
+   "id": "1",
+   "sah": 36.0,
+   "smishing": 87.3,
+   "total": 61.7,
+   "auto_close": 0,
+   "uci_pr_auc": 0.9864,
+   "panel_sah": 37.5,
+   "panel_smishing": 100.0,
+   "nama": "Sinyal penenang (aturan)",
+   "tanggal": "2026-10-22",
+   "vonis": "DITERIMA — app v4 (tambal terukur, bukan obat)",
+   "warna_vonis": "kuning",
+   "hipotesis": "Sebagian pesan sah yang dieskalasi punya pola resmi yang sangat khas. Aturan penenang yang sangat terbatas — turun tepat satu tingkat, tidak pernah menutup otomatis, dan gugur bila ada sinyal kuat — bisa menyelamatkan sebagian pesan sah tanpa menyentuh satu pun smishing.",
+   "metode": "Lapisan rules.py diberi arah sebaliknya (sinyal penenang): untuk pola resmi berformat sangat jelas — OTP standar tanpa tautan, tautan hanya ke domain resmi persis, notifikasi transaksi terstruktur tanpa tautan — band ESKALASI model boleh turun tepat satu tingkat ke REVIEW ANALIS. Penenang tidak pernah mengubah skor dan gugur total bila sinyal kuat S2/S3 aktif. Paket app (model lama + rules baru) dinilai ulang full-stack pada set hakim 300 yang sama.",
+   "hasil": "SAH 16,0% → 36,0%, SMISHING tetap 87,3%, smishing AUTO-CLOSE tetap 0 — lapisan aturan 0× salah tembak ke smishing. Total naik ke 61,7% dan panel sah 1/8 → 3/8.",
+   "pelajaran": "Tambal aturan bekerja dan terbukti aman, tetapi plafonnya rendah: 36,0% masih jauh dari gerbang SAH 85%. Ini tambal terukur, bukan obat — perbaikan sejatinya adalah fine-tune dwibahasa (Tahap 2)."
+  },
+  {
+   "id": "2c",
+   "sah": 84.0,
+   "smishing": 94.7,
+   "total": 89.3,
+   "auto_close": 3,
+   "uci_pr_auc": 0.9862,
+   "panel_sah": 87.5,
+   "panel_smishing": 100.0,
+   "nama": "Fine-tune dwibahasa (Tahap 2A–2C)",
+   "tanggal": "2026-10-22",
+   "vonis": "DITOLAK — gagal tipis: SAH 84,0% (kurang 2 pesan), SMISHING 94,7% (kurang 1 pesan), AUTO-CLOSE 3",
+   "warna_vonis": "merah",
+   "hipotesis": "Fine-tune DistilBERT multilingual pada korpus dwibahasa (Inggris UCI + Indonesia) mengajarkan register resmi Indonesia, sehingga SAH naik drastis tanpa mengorbankan deteksi smishing maupun kemampuan Inggris.",
+   "metode": "Korpus latih Indonesia dibangun dari nol (2.512 baris) dan digabung UCI; split FIT 5.831 / KALIBRASI 816. DistilBERT multilingual di-fine-tune 2 epoch di Colab T4, anggota sklearn dilatih ulang, dan ambang diturunkan dari split kalibrasi (t_close 0,2930 · t_esc 0,3516). Paket dinilai full-stack pada set hakim 300 yang sama.",
+   "hasil": "Lompatan besar: SAH 36,0% → 84,0%, SMISHING 87,3% → 94,7%, total 89,3%, panel 7/8 · 8/8, PR-AUC UCI 0,9862 ✅. Tetapi 3 smishing masuk zona AUTO-CLOSE — satu-satunya regresi keamanan — karena t_close turunan kalibrasi (0,2930) jauh lebih longgar daripada t_close app lama (0,010).",
+   "pelajaran": "Gagal tipis di 3 dari 4 gerbang: SAH kurang 2 pesan, SMISHING kurang 1 pesan, ditambah regresi AUTO-CLOSE. Penyakit register sebagian besar sembuh; masalah berpindah ke titik operasi (kriteria derivasi t_close) dan tiga kategori terlemah: keamanan_bank_resmi 60,0%, telco_tagihan_pulsa 66,7%, apk_malware 73,3%. Perbaikan berikutnya harus memperbaiki data + kriteria derivasi — bukan melonggarkan gerbang."
+  },
+  {
+   "id": "2d",
+   "sah": 92.7,
+   "smishing": 88.7,
+   "total": 90.7,
+   "auto_close": 2,
+   "uci_pr_auc": 0.9882,
+   "panel_sah": 100.0,
+   "panel_smishing": 100.0,
+   "nama": "Loop perbaikan 2D",
+   "tanggal": "2026-10-23",
+   "vonis": "DITOLAK — 2/4 gerbang; SAH sembuh 92,7% tetapi SMISHING mundur 88,7% dan AUTO-CLOSE 2; model app tidak ditukar",
+   "warna_vonis": "merah",
+   "hipotesis": "Menambah data latih tepat pada tiga kategori terlemah 2C — dipilih dari pola kategori, ditulis dari nol, bukan menyalin set hakim — plus memperketat kriteria derivasi t_close menjadi toleransi-nol akan menutup ketiga gerbang yang gagal tanpa merusak gerbang yang sudah lolos.",
+   "metode": "980 baris baru dari 7 keluarga templat (FIT +600; 380 baris dari 3 keluarga ditahan utuh untuk kalibrasi); gerbang kemiripan terukur: Jaccard maksimum yang lolos vs set hakim 0,50 (< 0,80). Derivasi ambang diganti ke toleransi-nol (max_missed_frac = 0,0). Checkpoint epoch-1 disimpan dan pemilihan epoch mengikuti aturan yang ditetapkan di muka — PR-AUC kalibrasi mentah tertinggi menang: epoch-1 0,9673 mengalahkan epoch-2 0,9288. Split baru FIT 6.431 / KALIBRASI 1.196; hanya kandidat menang yang dievaluasi ke gerbang.",
+   "hasil": "SAH 92,7% ✅ — kategori target sembuh: keamanan_bank_resmi 60,0% → 93,3% dan apk_malware 73,3% → 100%. PR-AUC UCI 0,9882 ✅, tertinggi sejauh ini; panel 16 sempurna 16/16 untuk pertama kalinya; total 90,7%. Tetapi SMISHING mundur 94,7% → 88,7% (kurang 9 pesan) dan smishing AUTO-CLOSE masih 2.",
+   "pelajaran": "Loop ini berhasil pada sasaran yang ditargetkan tetapi menukar masalah: 300 baris SAH formal baru menekan skor smishing non-target (model-saja 94,7% → 88,0%) dan t_esc naik 0,3516 → 0,4092 sehingga 15 smishing berhenti di REVIEW alih-alih ESKALASI. Kriteria toleransi-nol terpenuhi di kalibrasi, tetapi 2 smishing set hakim tetap lolos ke bawah t_close — celah generalisasi, karena 52% kalibrasi adalah keluarga templat penahan. Harga lainnya: pesan SAH yang berhenti di REVIEW naik 23 → 47, beban analis naik. Tidak ada satu pun angka yang digeser sesudah melihat set hakim."
+  }
+ ]
+}

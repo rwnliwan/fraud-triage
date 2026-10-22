@@ -1,0 +1,233 @@
+# -*- coding: utf-8 -*-
+"""Pembangkit `results.json` untuk tab "🧪 Perjalanan Riset" (app v5).
+
+Sumber angka (file evaluasi terverifikasi di ../id-train/):
+  - Tahap 1  : eval_smoke_current.json  (paket app live: model CHOSEN +
+               rules Tahap 1, dinilai full-stack pada set hakim 300)
+  - Tahap 2C : eval_tahap2c.json        (paket fine-tune dwibahasa)
+  - Tahap 2D : eval_tahap2d.json        (paket loop perbaikan 2D, epoch-1)
+
+Tahap 0 (baseline) TIDAK punya file evaluasi JSON — angkanya di-hardcode
+di bawah dengan sumber: tabel "Perbandingan vs baseline" pada
+id-train/tahap2c_results.md (kolom "Tahap 0 awal") yang identik dengan
+tabel perbandingan di id-train/tahap2d_results.md (kolom "Tahap 0"):
+SAH 16,0% · SMISHING 87,3% · Total 51,7% · AUTO-CLOSE 0 · UCI 0,986 ·
+Panel 1/8 · 8/8.
+
+Narasi per tahap didistilasi setia dari tahap2c_results.md,
+tahap2d_results.md, dan README_TAHAP2D.md §1/§7. Vonis ditulis apa
+adanya — termasuk dua paket yang DITOLAK.
+
+Jalankan:  python gen_results.py   (menulis results.json di folder ini)
+"""
+
+import json
+import os
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ID_TRAIN = os.path.join(HERE, "..", "id-train")
+OUT = os.path.join(HERE, "results.json")
+
+GERBANG = {"sah": 85, "smishing": 95, "uci_pr_auc": 0.98, "auto_close": 0}
+
+
+def _load(name):
+    with open(os.path.join(ID_TRAIN, name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _metrik(ev):
+    """Ekstrak metrik full-stack (lolos_final) dari satu file evaluasi."""
+    lab = ev["id300"]["per_label"]
+    panel = ev["panel16"]["per_label"]
+    return {
+        "sah": round(lab["sah"]["lolos_final"] * 100, 1),
+        "smishing": round(lab["smishing"]["lolos_final"] * 100, 1),
+        "total": round(ev["id300"]["total"]["lolos_final"] * 100, 1),
+        "auto_close": int(lab["smishing"]["auto_close_final"]),
+        "uci_pr_auc": round(ev["uci_test_pr_auc"], 4),
+        "panel_sah": round(panel["SAH"]["lolos_final"] * 100, 1),
+        "panel_smishing": round(panel["SMISHING"]["lolos_final"] * 100, 1),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tahap 0 — BASELINE (hardcode; sumber: tabel perbandingan
+# tahap2c_results.md "Perbandingan vs baseline", kolom "Tahap 0 awal",
+# terkonfirmasi identik di tahap2d_results.md kolom "Tahap 0").
+# Panel 1/8 = 12,5% dan 8/8 = 100%.
+# ---------------------------------------------------------------------------
+TAHAP_0 = {
+    "id": "0",
+    "nama": "Baseline & diagnosis",
+    "tanggal": "2026-10-22",
+    "sah": 16.0,
+    "smishing": 87.3,
+    "total": 51.7,
+    "auto_close": 0,
+    "uci_pr_auc": 0.986,
+    "panel_sah": 12.5,
+    "panel_smishing": 100.0,
+    "vonis": "BASELINE — titik berangkat; penyakit terdiagnosis, "
+             "bukan kandidat pengganti model",
+    "warna_vonis": "netral",
+    "hipotesis": (
+        "Model CHOSEN (ensemble Top-3 terkalibrasi yang dilatih pada SMS "
+        "Inggris UCI ±2011) cukup baik untuk triase SMS Indonesia, karena "
+        "pola smishing dianggap bersifat lintas bahasa."),
+    "metode": (
+        "Dibangun set hakim Indonesia: 300 pesan berlabel (150 SAH / 150 "
+        "SMISHING, 20 kategori) yang tidak pernah dipakai melatih model. "
+        "Model live dinilai apa adanya pada set itu. Gerbang klaim "
+        "ditetapkan di muka: SAH ≥ 85%, SMISHING ≥ 95%, PR-AUC UCI ≥ 0,98, "
+        "smishing AUTO-CLOSE = 0."),
+    "hasil": (
+        "SAH hanya 16,0% — 84% pesan sah Indonesia dieskalasi; median skor "
+        "SAH (0,471) bahkan lebih tinggi dari SMISHING (0,402). SMISHING "
+        "87,3%, total 51,7%, smishing AUTO-CLOSE 0, dan PR-AUC Inggris "
+        "tetap 0,986."),
+    "pelajaran": (
+        "Penyakitnya bukan model yang lemah, melainkan register: pesan "
+        "resmi formal-institusional Indonesia tidak pernah ada di data "
+        "latih Inggris, sehingga pesan yang 'terdengar resmi' terbaca "
+        "sebagai mencurigakan. Perbaikan harus menyentuh data dan "
+        "representasi bahasa Indonesia — bukan sekadar menggeser ambang."),
+}
+
+NARASI = {
+    "1": {
+        "nama": "Sinyal penenang (aturan)",
+        "tanggal": "2026-10-22",
+        "vonis": "DITERIMA — app v4 (tambal terukur, bukan obat)",
+        "warna_vonis": "kuning",
+        "hipotesis": (
+            "Sebagian pesan sah yang dieskalasi punya pola resmi yang "
+            "sangat khas. Aturan penenang yang sangat terbatas — turun "
+            "tepat satu tingkat, tidak pernah menutup otomatis, dan gugur "
+            "bila ada sinyal kuat — bisa menyelamatkan sebagian pesan sah "
+            "tanpa menyentuh satu pun smishing."),
+        "metode": (
+            "Lapisan rules.py diberi arah sebaliknya (sinyal penenang): "
+            "untuk pola resmi berformat sangat jelas — OTP standar tanpa "
+            "tautan, tautan hanya ke domain resmi persis, notifikasi "
+            "transaksi terstruktur tanpa tautan — band ESKALASI model "
+            "boleh turun tepat satu tingkat ke REVIEW ANALIS. Penenang "
+            "tidak pernah mengubah skor dan gugur total bila sinyal kuat "
+            "S2/S3 aktif. Paket app (model lama + rules baru) dinilai "
+            "ulang full-stack pada set hakim 300 yang sama."),
+        "hasil": (
+            "SAH 16,0% → 36,0%, SMISHING tetap 87,3%, smishing AUTO-CLOSE "
+            "tetap 0 — lapisan aturan 0× salah tembak ke smishing. Total "
+            "naik ke 61,7% dan panel sah 1/8 → 3/8."),
+        "pelajaran": (
+            "Tambal aturan bekerja dan terbukti aman, tetapi plafonnya "
+            "rendah: 36,0% masih jauh dari gerbang SAH 85%. Ini tambal "
+            "terukur, bukan obat — perbaikan sejatinya adalah fine-tune "
+            "dwibahasa (Tahap 2)."),
+    },
+    "2c": {
+        "nama": "Fine-tune dwibahasa (Tahap 2A–2C)",
+        "tanggal": "2026-10-22",
+        "vonis": "DITOLAK — gagal tipis: SAH 84,0% (kurang 2 pesan), "
+                 "SMISHING 94,7% (kurang 1 pesan), AUTO-CLOSE 3",
+        "warna_vonis": "merah",
+        "hipotesis": (
+            "Fine-tune DistilBERT multilingual pada korpus dwibahasa "
+            "(Inggris UCI + Indonesia) mengajarkan register resmi "
+            "Indonesia, sehingga SAH naik drastis tanpa mengorbankan "
+            "deteksi smishing maupun kemampuan Inggris."),
+        "metode": (
+            "Korpus latih Indonesia dibangun dari nol (2.512 baris) dan "
+            "digabung UCI; split FIT 5.831 / KALIBRASI 816. DistilBERT "
+            "multilingual di-fine-tune 2 epoch di Colab T4, anggota "
+            "sklearn dilatih ulang, dan ambang diturunkan dari split "
+            "kalibrasi (t_close 0,2930 · t_esc 0,3516). Paket dinilai "
+            "full-stack pada set hakim 300 yang sama."),
+        "hasil": (
+            "Lompatan besar: SAH 36,0% → 84,0%, SMISHING 87,3% → 94,7%, "
+            "total 89,3%, panel 7/8 · 8/8, PR-AUC UCI 0,9862 ✅. Tetapi 3 "
+            "smishing masuk zona AUTO-CLOSE — satu-satunya regresi "
+            "keamanan — karena t_close turunan kalibrasi (0,2930) jauh "
+            "lebih longgar daripada t_close app lama (0,010)."),
+        "pelajaran": (
+            "Gagal tipis di 3 dari 4 gerbang: SAH kurang 2 pesan, "
+            "SMISHING kurang 1 pesan, ditambah regresi AUTO-CLOSE. "
+            "Penyakit register sebagian besar sembuh; masalah berpindah "
+            "ke titik operasi (kriteria derivasi t_close) dan tiga "
+            "kategori terlemah: keamanan_bank_resmi 60,0%, "
+            "telco_tagihan_pulsa 66,7%, apk_malware 73,3%. Perbaikan "
+            "berikutnya harus memperbaiki data + kriteria derivasi — "
+            "bukan melonggarkan gerbang."),
+    },
+    "2d": {
+        "nama": "Loop perbaikan 2D",
+        "tanggal": "2026-10-23",
+        "vonis": "DITOLAK — 2/4 gerbang; SAH sembuh 92,7% tetapi "
+                 "SMISHING mundur 88,7% dan AUTO-CLOSE 2; model app "
+                 "tidak ditukar",
+        "warna_vonis": "merah",
+        "hipotesis": (
+            "Menambah data latih tepat pada tiga kategori terlemah 2C — "
+            "dipilih dari pola kategori, ditulis dari nol, bukan menyalin "
+            "set hakim — plus memperketat kriteria derivasi t_close "
+            "menjadi toleransi-nol akan menutup ketiga gerbang yang gagal "
+            "tanpa merusak gerbang yang sudah lolos."),
+        "metode": (
+            "980 baris baru dari 7 keluarga templat (FIT +600; 380 baris "
+            "dari 3 keluarga ditahan utuh untuk kalibrasi); gerbang "
+            "kemiripan terukur: Jaccard maksimum yang lolos vs set hakim "
+            "0,50 (< 0,80). Derivasi ambang diganti ke toleransi-nol "
+            "(max_missed_frac = 0,0). Checkpoint epoch-1 disimpan dan "
+            "pemilihan epoch mengikuti aturan yang ditetapkan di muka — "
+            "PR-AUC kalibrasi mentah tertinggi menang: epoch-1 0,9673 "
+            "mengalahkan epoch-2 0,9288. Split baru FIT 6.431 / KALIBRASI "
+            "1.196; hanya kandidat menang yang dievaluasi ke gerbang."),
+        "hasil": (
+            "SAH 92,7% ✅ — kategori target sembuh: keamanan_bank_resmi "
+            "60,0% → 93,3% dan apk_malware 73,3% → 100%. PR-AUC UCI "
+            "0,9882 ✅, tertinggi sejauh ini; panel 16 sempurna 16/16 "
+            "untuk pertama kalinya; total 90,7%. Tetapi SMISHING mundur "
+            "94,7% → 88,7% (kurang 9 pesan) dan smishing AUTO-CLOSE "
+            "masih 2."),
+        "pelajaran": (
+            "Loop ini berhasil pada sasaran yang ditargetkan tetapi "
+            "menukar masalah: 300 baris SAH formal baru menekan skor "
+            "smishing non-target (model-saja 94,7% → 88,0%) dan t_esc "
+            "naik 0,3516 → 0,4092 sehingga 15 smishing berhenti di REVIEW "
+            "alih-alih ESKALASI. Kriteria toleransi-nol terpenuhi di "
+            "kalibrasi, tetapi 2 smishing set hakim tetap lolos ke bawah "
+            "t_close — celah generalisasi, karena 52% kalibrasi adalah "
+            "keluarga templat penahan. Harga lainnya: pesan SAH yang "
+            "berhenti di REVIEW naik 23 → 47, beban analis naik. Tidak "
+            "ada satu pun angka yang digeser sesudah melihat set hakim."),
+    },
+}
+
+SUMBER = {
+    "1": "eval_smoke_current.json",
+    "2c": "eval_tahap2c.json",
+    "2d": "eval_tahap2d.json",
+}
+
+
+def main():
+    stages = [TAHAP_0]
+    for sid in ("1", "2c", "2d"):
+        m = _metrik(_load(SUMBER[sid]))
+        stages.append({"id": sid, **m, **NARASI[sid]})
+
+    data = {"gates": GERBANG, "stages": stages}
+    with open(OUT, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+
+    print(f"results.json ditulis: {OUT}")
+    print(f"{'Tahap':<6}{'SAH':>7}{'SMISH':>8}{'Total':>8}"
+          f"{'A-CLOSE':>9}{'PR-AUC':>9}  Vonis")
+    for s in stages:
+        print(f"{s['id']:<6}{s['sah']:>7.1f}{s['smishing']:>8.1f}"
+              f"{s['total']:>8.1f}{s['auto_close']:>9}"
+              f"{s['uci_pr_auc']:>9.4f}  {s['vonis'][:52]}")
+
+
+if __name__ == "__main__":
+    main()
