@@ -18,10 +18,10 @@ anggota ensemble, dan penjelasan faktor teks (kata pendorong + fitur angka).
 | `triage_core.py` | Logika model murni (tanpa Streamlit): ensemble, kalibrasi temperatur, kebijakan dua ambang, penjelasan faktor |
 | `build_artifacts.py` | Skrip pembangunan artefak deploy dari resep notebook + verifikasi angka (sudah dijalankan; jalankan ulang hanya bila resep berubah) |
 | `requirements.txt` | Dependensi (torch diarahkan ke wheel CPU) |
-| `model/ensemble_spec.json` | Spesifikasi ensemble: anggota, temperatur per anggota, ambang kebijakan |
-| `model/sklearn_members.joblib` | Dua anggota sklearn yang dilatih ulang persis dari resep notebook (pipeline LR + komponen model fitur) |
+| `model/ensemble_spec.json` | Spesifikasi ensemble: anggota, temperatur per anggota, ambang kebijakan (salinan lokal; di cloud diunduh dari Hugging Face) |
+| `model/sklearn_members.joblib` | Dua anggota sklearn yang dilatih ulang persis dari resep notebook (pipeline LR + komponen model fitur) — berkas biner, **tidak ikut repo GitHub**; di cloud diunduh dari Hugging Face |
 | `model/model_operasional.pkl` | Salinan artefak resmi proyek — isinya **spesifikasi** ensemble (nama anggota + temperatur), sumber kebenaran `ensemble_spec.json` |
-| `model/bert/` | *(belum ada — lihat langkah bobot BERT di bawah)* tempat bobot DistilBERT fine-tune bila memakai jalur Git LFS |
+| `model/bert/` | *(opsional, lokal saja)* tempat bobot DistilBERT fine-tune bila ingin menimpa sumber cloud |
 
 ## Cara model dimuat (penting, jujur apa adanya)
 
@@ -40,7 +40,16 @@ memori kernel. Karena itu artefak deploy dibangun begini:
    gerbang memori Bagian 7). App memuatnya dari salah satu sumber ini
    (urutan di `triage_core.resolve_bert_source`): variabel lingkungan
    `BERT_MODEL_PATH` → folder `model/bert/` → `data/bert_snapshot` proyek
-   (mode dev lokal) → `BERT_MODEL_ID` (repo Hugging Face).
+   (mode dev lokal) → `BERT_MODEL_ID` (repo Hugging Face) → repo artefak
+   bawaan (di bawah).
+3. **Jalur cloud (bawaan deploy)**: seluruh artefak yang dibutuhkan app —
+   `ensemble_spec.json`, `sklearn_members.joblib`, dan bobot DistilBERT
+   (config + `model.safetensors` + tokenizer) — terunggah di repo model
+   Hugging Face **publik** `rwnliwan/fraud-triage-smishing`. Resolusi
+   selalu lokal-dulu; bila berkas lokal tidak ada (kondisi normal di
+   Streamlit Cloud, karena repo GitHub hanya berisi kode), artefak
+   diunduh dari repo itu tanpa token. Repo sumber bisa diganti lewat
+   env/secrets `ARTIFACT_REPO_ID`.
 3. **Verifikasi pembangunan**: PR-AUC hasil bangun ulang cocok dengan
    angka resmi notebook — LR val 0,968 · Fitur val 0,969 · BERT val 0,978 ·
    Ensemble val 0,982 · **Ensemble test 0,986**.
@@ -67,52 +76,41 @@ print(e.triage('URGENT: your account will be blocked today, verify PIN at secure
 "
 ```
 
-## Deploy ke Streamlit Community Cloud (dilakukan bersama Septian)
+## Deploy ke Streamlit Community Cloud
 
-### Langkah 1 — Siapkan bobot DistilBERT (±517 MB) di salah satu tempat
+Seluruh artefak model sudah terunggah di repo Hugging Face publik
+**`rwnliwan/fraud-triage-smishing`** dan repo GitHub hanya berisi kode —
+jadi deploy tidak lagi butuh penempatan bobot manual.
 
-GitHub menolak berkas > 100 MB tanpa LFS, jadi pilih **satu** jalur:
+### Langkah 1 — Repo GitHub
 
-**Jalur A — Hugging Face Hub (disarankan).**
-1. Login ke huggingface.co (akun Septian) → *New Model*, buat repo model
-   **publik**, mis. `<username>/fraud-triage-distilbert` (bobot ini hasil
-   fine-tune sendiri dari base publik di data publik — aman dipublikkan).
-2. Upload seluruh isi folder proyek `data/bert_snapshot/`
-   (`config.json`, `model.safetensors`, berkas tokenizer).
-3. Nanti di Langkah 3, isi Streamlit *Secrets*:
-   `BERT_MODEL_ID = "<username>/fraud-triage-distilbert"`.
+Repo GitHub berisi isi folder `streamlit-app/` ini sebagai root
+(`app.py`, `triage_core.py`, `build_artifacts.py`, `requirements.txt`,
+`README.md`, `model/ensemble_spec.json`). Berkas biner
+(`sklearn_members.joblib`, bobot BERT) **sengaja tidak** ikut repo —
+app mengunduhnya dari Hugging Face saat pertama jalan.
 
-**Jalur B — Git LFS.**
-Salin isi `data/bert_snapshot/` ke `streamlit-app/model/bert/`, lalu
-`git lfs track "*.safetensors"` sebelum push. Catatan: kuota LFS gratis
-GitHub 1 GB storage / 1 GB bandwidth per bulan — setiap deploy Streamlit
-menarik bobot ini, jadi jalur A lebih longgar.
+### Langkah 2 — Buat app di Streamlit Community Cloud
 
-### Langkah 2 — Buat repo GitHub & push folder ini
-
-1. Buat repo GitHub baru (mis. `fraud-triage-app`) dari akun Septian.
-2. Jadikan **folder `streamlit-app/` ini sebagai root repo** lalu push
-   (`app.py`, `triage_core.py`, `requirements.txt`, `README.md`,
-   folder `model/` — termasuk `model/bert/` hanya bila Jalur B).
-   Belum ada apa pun yang di-push pada tahap persiapan ini.
-
-### Langkah 3 — Buat app di Streamlit Community Cloud
-
-1. Buka **share.streamlit.io** → *Sign in with GitHub* (akun Septian).
-2. Klik **New app** → pilih repo `fraud-triage-app`, branch `main`,
+1. Buka **share.streamlit.io** → *Sign in with GitHub*.
+2. Klik **New app** → pilih repo GitHub itu, branch `main`,
    *Main file path*: `app.py`.
 3. (Opsional, di *Advanced settings*) Python 3.12.
-4. Bila Jalur A: di *Secrets* tambahkan
-   `BERT_MODEL_ID = "<username>/fraud-triage-distilbert"`.
+4. **Secrets TIDAK wajib diisi** — model otomatis diambil dari repo
+   Hugging Face publik bawaan. Override hanya bila perlu mengganti
+   sumber artefak: `ARTIFACT_REPO_ID = "<user>/<repo-model-lain>"`
+   (atau `BERT_MODEL_ID` khusus untuk bobot DistilBERT saja).
 5. Klik **Deploy** dan tunggu build pertama selesai (tarik torch CPU +
-   transformers; beberapa menit).
+   transformers, lalu unduh model ±541 MB dari Hugging Face;
+   beberapa menit).
 
-### Langkah 4 — Verifikasi pasca-deploy
+### Langkah 3 — Verifikasi pasca-deploy
 
 Klik contoh **"🎁 Undian palsu (ID)"** → keputusan harus **ESKALASI**
-(skor ±0,65); contoh **"💬 Pesan sah (EN)"** → skor sangat rendah (±0,01).
-Bila app gagal memuat model, pesan error di app menyebut sumber bobot
-yang dicari — cocokkan dengan jalur yang dipilih di Langkah 1.
+(skor ±0,65); contoh **"💬 Pesan sah (EN)"** → **REVIEW ANALIS**
+(skor ±0,012). Bila app gagal memuat model, pesan error di app menyebut
+sumber artefak yang dicari — periksa repo `ARTIFACT_REPO_ID` yang aktif
+(bawaan: `rwnliwan/fraud-triage-smishing`).
 
 ### Catatan sumber daya
 

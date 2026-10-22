@@ -57,14 +57,19 @@ BENCHMARK = [
 @st.cache_resource(show_spinner="Memuat ensemble (termasuk DistilBERT)…")
 def load_engine():
     bert_source = None
+    artifact_repo_id = None
     try:
         bert_source = st.secrets.get("BERT_MODEL_PATH") or st.secrets.get(
             "BERT_MODEL_ID")
+        artifact_repo_id = st.secrets.get("ARTIFACT_REPO_ID")
     except Exception:
         bert_source = None
+        artifact_repo_id = None
     bert_source = bert_source or os.environ.get("BERT_MODEL_PATH") \
         or os.environ.get("BERT_MODEL_ID")
-    return TriageEngine(bert_source=bert_source)
+    artifact_repo_id = artifact_repo_id or os.environ.get("ARTIFACT_REPO_ID")
+    return TriageEngine(bert_source=bert_source,
+                        artifact_repo_id=artifact_repo_id)
 
 
 st.title("🛡️ Fraud Triage — Triase Smishing")
@@ -79,9 +84,11 @@ try:
     engine = load_engine()
 except Exception as exc:  # bobot BERT belum tersedia di lingkungan ini
     st.error(f"Model belum bisa dimuat: {exc}")
-    st.info("Untuk deploy: ikuti langkah penempatan bobot DistilBERT "
-            "di README.md (folder model/bert/ via Git LFS, atau repo "
-            "Hugging Face + secrets BERT_MODEL_ID).")
+    st.info("Secara bawaan app mengunduh seluruh artefak model dari repo "
+            "Hugging Face publik rwnliwan/fraud-triage-smishing — "
+            "periksa koneksi keluar app, atau set secrets opsional "
+            "ARTIFACT_REPO_ID / BERT_MODEL_ID ke repo lain. "
+            "Lihat README.md.")
     st.stop()
 
 st.subheader("Contoh pesan — klik untuk memakai")

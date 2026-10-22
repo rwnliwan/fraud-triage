@@ -21,6 +21,14 @@ oleh build_artifacts.py dan disimpan sebagai model/sklearn_members.joblib,
 sedangkan bobot DistilBERT fine-tune memang tersimpan sejak notebook
 (data/bert_snapshot, dibekukan di gerbang memori Bagian 7).
 
+Jalur cloud (Streamlit Community Cloud): ketiga artefak yang dibutuhkan
+(ensemble_spec.json, sklearn_members.joblib, dan bobot DistilBERT) juga
+tersedia di repo model Hugging Face PUBLIK `rwnliwan/fraud-triage-smishing`.
+Resolusi selalu lokal-dulu; bila berkas lokal tidak ada, artefak diunduh
+dari repo itu (tanpa token — repo publik). Repo bisa diganti lewat argumen
+`artifact_repo_id`, env `ARTIFACT_REPO_ID`, atau Streamlit secrets
+`ARTIFACT_REPO_ID`.
+
 Modul ini TIDAK bergantung pada Streamlit agar bisa diuji berdiri sendiri.
 """
 
@@ -36,6 +44,12 @@ APP_DIR = Path(__file__).resolve().parent
 MODEL_DIR = APP_DIR / "model"
 SPEC_PATH = MODEL_DIR / "ensemble_spec.json"
 SKLEARN_BUNDLE_PATH = MODEL_DIR / "sklearn_members.joblib"
+
+# Repo model Hugging Face publik berisi seluruh artefak ensemble
+# (ensemble_spec.json, sklearn_members.joblib, config.json,
+# model.safetensors, tokenizer). Dipakai sebagai sumber cloud bila
+# berkas lokal tidak ada, dan sebagai default BERT_MODEL_ID.
+DEFAULT_ARTIFACT_REPO_ID = "rwnliwan/fraud-triage-smishing"
 
 MEMBER_BERT = "DistilBERT multilingual (fine-tune)"
 MEMBER_FEATS = "TF-IDF + Fitur Angka + Logistic Regression"
@@ -100,12 +114,46 @@ def apply_temperature(p, T):
     return 1.0 / (1.0 + np.exp(-logits / T))
 
 
-def resolve_bert_source(explicit=None):
+def _secrets_get(name):
+    """Baca Streamlit secrets bila tersedia; None di luar runtime Streamlit.
+
+    triage_core sengaja bebas Streamlit — impor di sini bersifat opsional
+    dan semua kegagalannya ditelan agar modul tetap bisa diuji standalone.
+    """
+    try:
+        import streamlit as st
+        return st.secrets.get(name)
+    except Exception:
+        return None
+
+
+def resolve_artifact_repo_id(explicit=None):
+    """Repo Hugging Face sumber artefak cloud.
+
+    Urutan: argumen eksplisit -> env ARTIFACT_REPO_ID -> Streamlit
+    secrets ARTIFACT_REPO_ID -> DEFAULT_ARTIFACT_REPO_ID.
+    """
+    if explicit:
+        return explicit
+    return (os.environ.get("ARTIFACT_REPO_ID")
+            or _secrets_get("ARTIFACT_REPO_ID")
+            or DEFAULT_ARTIFACT_REPO_ID)
+
+
+def _hf_download(filename, repo_id):
+    """Unduh satu berkas dari repo model HF (publik, tanpa token)."""
+    from huggingface_hub import hf_hub_download
+    return hf_hub_download(repo_id=repo_id, filename=filename,
+                           repo_type="model")
+
+
+def resolve_bert_source(explicit=None, artifact_repo_id=None):
     """Tentukan dari mana bobot DistilBERT fine-tune dimuat.
 
     Urutan: argumen eksplisit -> env BERT_MODEL_PATH -> folder model/bert/
     di app -> folder data/bert_snapshot proyek (mode dev lokal) ->
-    env BERT_MODEL_ID (repo Hugging Face). None bila tak ditemukan.
+    env BERT_MODEL_ID (repo Hugging Face) -> repo artefak default
+    (konstanta DEFAULT_ARTIFACT_REPO_ID, bisa dioverride ARTIFACT_REPO_ID).
     """
     if explicit:
         return explicit
@@ -118,32 +166,56 @@ def resolve_bert_source(explicit=None):
     dev_snapshot = APP_DIR.parent / "data" / "bert_snapshot"
     if (dev_snapshot / "config.json").exists():
         return str(dev_snapshot)
-    return os.environ.get("BERT_MODEL_ID")
+    return (os.environ.get("BERT_MODEL_ID")
+            or _secrets_get("BERT_MODEL_ID")
+            or resolve_artifact_repo_id(artifact_repo_id))
 
 
 class TriageEngine:
     """Ensemble terkalibrasi + kebijakan dua ambang, siap saji."""
 
-    def __init__(self, bert_source=None):
-        self.spec = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
+    def __init__(self, bert_source=None, artifact_repo_id=None):
+        self.artifact_repo_id = resolve_artifact_repo_id(artifact_repo_id)
+
+        # Spesifikasi ensemble: lokal dulu, lalu unduh dari repo HF.
+        if SPEC_PATH.exists():
+            spec_text = SPEC_PATH.read_text(encoding="utf-8")
+            self.spec_source = str(SPEC_PATH)
+        else:
+            spec_file = _hf_download("ensemble_spec.json",
+                                     self.artifact_repo_id)
+            spec_text = Path(spec_file).read_text(encoding="utf-8")
+            self.spec_source = (f"hf://{self.artifact_repo_id}/"
+                                "ensemble_spec.json")
+        self.spec = json.loads(spec_text)
         self.temps = self.spec["temperatures"]
         self.members = self.spec["members"]
         self.t_close = float(self.spec["t_close"])
         self.t_esc = float(self.spec["t_esc"])
         self.max_len = int(self.spec.get("max_len", 64))
 
-        bundle = joblib.load(SKLEARN_BUNDLE_PATH)
+        # Anggota sklearn: lokal dulu, lalu unduh dari repo HF.
+        if SKLEARN_BUNDLE_PATH.exists():
+            bundle_path = SKLEARN_BUNDLE_PATH
+            self.sklearn_source = str(bundle_path)
+        else:
+            bundle_path = _hf_download("sklearn_members.joblib",
+                                       self.artifact_repo_id)
+            self.sklearn_source = (f"hf://{self.artifact_repo_id}/"
+                                   "sklearn_members.joblib")
+        bundle = joblib.load(bundle_path)
         self.lr_pipe = bundle["lr_pipe"]
         self.feat_vec = bundle["feat_vec"]
         self.scaler = bundle["scaler"]
         self.feats_clf = bundle["feats_clf"]
 
-        src = resolve_bert_source(bert_source)
+        src = resolve_bert_source(bert_source, self.artifact_repo_id)
         if not src:
             raise FileNotFoundError(
                 "Bobot DistilBERT fine-tune tidak ditemukan. Taruh di "
                 "streamlit-app/model/bert/ (salinan data/bert_snapshot), "
-                "atau set BERT_MODEL_PATH / BERT_MODEL_ID. Lihat README.md.")
+                "atau set BERT_MODEL_PATH / BERT_MODEL_ID / "
+                "ARTIFACT_REPO_ID. Lihat README.md.")
         self.bert_source = src
         import torch
         from transformers import (AutoModelForSequenceClassification,
@@ -247,5 +319,6 @@ class TriageEngine:
         }
 
 
-def load_engine(bert_source=None):
-    return TriageEngine(bert_source=bert_source)
+def load_engine(bert_source=None, artifact_repo_id=None):
+    return TriageEngine(bert_source=bert_source,
+                        artifact_repo_id=artifact_repo_id)
