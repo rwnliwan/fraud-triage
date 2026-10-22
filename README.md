@@ -16,6 +16,27 @@ band), **riwayat sesi**, dan sidebar info model dengan keterbatasan yang
 jujur. Tema gelap "fraud ops console" diatur di `.streamlit/config.toml`
 plus CSS kustom di `app.py`.
 
+**Baru di v3** (menutup kritik atas v2):
+
+- **Ekspor CSV** untuk tiga hal: hasil batch, riwayat sesi, dan log
+  koreksi (kolom: teks dipotong aman, skor, band model, band final,
+  aturan terpicu, sinyal aktif).
+- **Batch yang layak kerja**: bilah progres per pesan ("Menilai i dari
+  N"), batas **200 baris** ditegakkan (baris kosong dilewati; di luar
+  batas ditolak dengan pesan jelas, tidak ada yang diproses diam-diam).
+  Engine publik hanya menilai per teks, jadi batch berjalan sekuensial
+  dengan progres.
+- **Batas input tunggal 2.000 karakter** — teks lebih panjang dipotong
+  dan peringatan ditampilkan.
+- **Tombol koreksi** di bawah hasil tunggal: pengguna memilih band yang
+  benar menurutnya; tercatat di **log koreksi sesi** (dengan unduh CSV).
+  Jujur apa adanya: log ini hidup **hanya di sesi browser (demo)** —
+  tidak ada penyimpanan permanen dan tidak terkirim ke mana pun.
+- **Tab 🇮🇩 Evaluasi ID**: set uji kecil buatan 16 pesan Indonesia
+  berlabel harapan yang dijalankan apa adanya — lihat hasilnya di bawah.
+- **Kalimat penjelasan vonis** pada kartu hasil + footer berisi versi
+  app dan tautan repo/model.
+
 ## Lapisan aturan (rules layer)
 
 Di atas skor model ada lapisan aturan deterministik (`rules.py`, murni
@@ -42,11 +63,53 @@ regex, tanpa dependensi ML) yang dirancang konservatif:
 
 ---
 
+## Panel evaluasi Indonesia (v3) — hasil apa adanya
+
+Tab 🇮🇩 Evaluasi ID menjalankan **16 pesan buatan** (8 sah, 8 smishing;
+nama bank fiktif "Bank Nusantara"/"Bank Sentosa", domain mencurigakan
+fiktif) yang **dikunci di kode sebelum pertama kali dijalankan**. Ini
+**bukan benchmark** — hanya panel transparansi. Definisi "sesuai": sah →
+band final AUTO-CLOSE/REVIEW; smishing → band final ESKALASI.
+
+Hasil run pertama (dan run UI sesudahnya identik):
+
+| Kelompok | Sesuai | Catatan |
+|---|---|---|
+| Pesan SAH | **1/8** | Hanya pesan pribadi (0,009 → AUTO-CLOSE) yang tidak dieskalasi. Tujuh pesan sah lain — OTP bank asli (0,462), notifikasi transaksi (0,729), tagihan telekomunikasi (0,546), kurir wajar (0,655), notifikasi keamanan bank (0,561), e-statement (0,682), undangan rapat (0,267) — semuanya di-ESKALASI **oleh model sendiri**; lapisan aturan tidak pernah memicu pada pesan sah. |
+| SMISHING | **8/8** | Semua mencapai ESKALASI; 4 di antaranya dibantu lapisan aturan (S1+S2 atau S1+S2+S3), 4 sisanya murni skor model. |
+
+**Bacaan jujurnya:** pada set kecil ini model sangat agresif terhadap
+teks Indonesia — smishing tertangkap semua, tetapi presisi pada pesan
+sah Indonesia buruk (over-eskalasi), konsisten dengan keterbatasan data
+latih UCI SMS Inggris ±2011. Panel ini sengaja menampilkan kegagalan
+itu, bukan menyembunyikannya; memperbaikinya butuh data latih/evaluasi
+Indonesia berlabel yang sesungguhnya, bukan penyesuaian pesan uji.
+
+## Uji float16 (v3) — TIDAK diadopsi
+
+DistilBERT diuji dalam dua dtype (cast saat muat lokal, repo HF tidak
+diubah; CPU, 4 probe resmi + latensi 5 pesan × 3 putaran):
+
+| Ukuran | fp32 | fp16 (cast) |
+|---|---|---|
+| Skor probe (undian / ham / OTP / spam) | 0,652 / 0,012 / 0,293 / 0,220 | 0,652 / 0,012 / 0,293 / 0,220 (selisih maks **0,000053**) |
+| Band probe | sama persis | sama persis |
+| Bobot BERT | 541,3 MB | 270,7 MB |
+| Latensi per pesan | **114,7 ms** | **179,5 ms (+56%)** |
+
+Aturan adopsi yang ditetapkan sebelumnya: band probe sama DAN selisih
+skor ≤ 0,005 DAN latensi tidak memburuk > 25%. fp16 lolos dua syarat
+pertama tetapi **gagal syarat latensi** (CPU tidak punya akselerasi
+fp16 untuk model ini), jadi **app tetap fp32**. Penghematan memori
+271 MB tidak ditukar dengan inferensi 56% lebih lambat.
+
+---
+
 ## Isi folder
 
 | Berkas | Fungsi |
 |---|---|
-| `app.py` | Antarmuka Streamlit (Bahasa Indonesia, istilah teknis English): analisis tunggal, mode batch, riwayat sesi, panel sinyal, bilah skor |
+| `app.py` | Antarmuka Streamlit **v3** (Bahasa Indonesia, istilah teknis English): analisis tunggal (batas 2.000 char, kalimat vonis, tombol koreksi + log koreksi sesi), mode batch (progres per pesan, batas 200 baris), ekspor CSV (batch/riwayat/koreksi), tab evaluasi ID, riwayat sesi, panel sinyal, bilah skor |
 | `triage_core.py` | Logika model murni (tanpa Streamlit): ensemble, kalibrasi temperatur, kebijakan dua ambang, penjelasan faktor |
 | `rules.py` | Lapisan aturan murni regex (tanpa Streamlit): deteksi sinyal teks + aturan kombinasi ≥2 sinyal kuat yang memaksa ESKALASI (hanya menaikkan) |
 | `.streamlit/config.toml` | Tema gelap "fraud ops console" (warna dasar, aksen amber) |
@@ -150,10 +213,13 @@ sumber artefak yang dicari — periksa repo `ARTIFACT_REPO_ID` yang aktif
 ### Catatan sumber daya
 
 Tier gratis Streamlit Cloud memberi RAM ±1 GB. DistilBERT multilingual
-fp32 memakai ±517 MB bobot; app ini sudah teruji memuat & memprediksi di
-CPU. Bila suatu saat deploy kena batas RAM, opsi tindak lanjutnya adalah
-memuat bobot dalam float16 (±260 MB) — minta Chief menyiapkan variannya,
-jangan mengubah sendiri angka modelnya.
+fp32 memakai 541,3 MB bobot; app ini sudah teruji memuat & memprediksi
+di CPU. Opsi float16 **sudah diuji di v3 dan tidak diadopsi** — bobot
+memang separuh (270,7 MB) dan skor praktis identik, tetapi latensi CPU
+memburuk +56% (lihat bagian "Uji float16" di atas). Bila suatu saat
+deploy kena batas RAM, opsi tindak lanjutnya adalah membatasi beban
+dengan cara lain (mis. antrean/pembatasan laju), bukan menurunkan
+presisi angka model.
 
 ---
 
