@@ -16,6 +16,23 @@ band), **riwayat sesi**, dan sidebar info model dengan keterbatasan yang
 jujur. Tema gelap "fraud ops console" diatur di `.streamlit/config.toml`
 plus CSS kustom di `app.py`.
 
+**Baru di v4** (Tahap 1 perbaikan Indonesia — **sinyal penenang**):
+
+- Baseline Tahap 0 (set evaluasi Indonesia v1, 300 pesan berlabel)
+  membuktikan model mengeskalasi **84% pesan sah** Indonesia (sah lolos
+  hanya **16,0%**) — penyakitnya register formal institusional yang tak
+  pernah ada di data latih UCI Inggris ±2011, bukan lapisan aturan
+  (aturan 0× terpicu pada pesan sah).
+- `rules.py` kini punya **sinyal penenang**: pola resmi berformat sangat
+  jelas (OTP standar tanpa tautan; tautan hanya ke domain resmi persis;
+  notifikasi transaksi terstruktur tanpa tautan) menurunkan band
+  ESKALASI model **tepat satu tingkat** ke REVIEW ANALIS. Tidak pernah
+  AUTO-CLOSE, tidak mengubah skor, gugur total bila S2/S3 aktif atau
+  aturan terpicu. Hasil terukur & desain finalnya: bagian "Sinyal
+  penenang" di bawah.
+- Kartu hasil menampilkan lencana ⬇️ penenang + alasannya; panel sinyal,
+  tabel batch/riwayat, dan ekspor CSV memuat kolom penenang.
+
 **Baru di v3** (menutup kritik atas v2):
 
 - **Ekspor CSV** untuk tiga hal: hasil batch, riwayat sesi, dan log
@@ -60,6 +77,60 @@ regex, tanpa dependensi ML) yang dirancang konservatif:
 - **Transparan.** Bila aturan menaikkan band, kartu hasil menampilkan
   lencana "Aturan terpicu" berisi sinyal-sinyalnya; panel sinyal selalu
   menampilkan hitungan sinyal kuat yang aktif.
+
+## Sinyal penenang (v4 — Tahap 1 perbaikan Indonesia)
+
+Arah sebaliknya dari lapisan aturan, dirancang sama konservatifnya.
+Latarnya terukur: pada **set evaluasi Indonesia v1** (300 pesan
+berlabel: 150 sah / 150 smishing, 20 kategori × 15 — folder
+`../id-eval-set/`), app v3 hanya meloloskan **16,0% pesan sah**
+(126/150 dieskalasi **model sendiri**; median skor sah 0,471 justru di
+atas median smishing 0,402), sementara smishing tertangkap **87,3%**
+dan **0** smishing sampai AUTO-CLOSE.
+
+Tiga pola penenang (`evaluate_calm()` di `rules.py`):
+
+- **P1 — format OTP standar**: kode OTP/verifikasi + frasa penjaga
+  ("jangan bagikan/berikan …") dan **tanpa tautan sama sekali**.
+- **P2 — domain resmi persis**: setiap tautan dalam pesan host-nya
+  cocok **persis** dengan daftar domain resmi terkurasi (17 domain:
+  bank besar, telco, kurir, e-commerce Indonesia; subdomain resmi hanya
+  bila berakhiran domain itu persis — domain siluman seperti
+  `bca.co.id.evil.com` tidak lolos).
+- **P3 — notifikasi transaksi terstruktur tanpa tautan**: nominal Rp +
+  penanda pernyataan (pernyataan saldo / nomor referensi / "berhasil"
+  transaksional) — dan **gugur bila ada umpan hadiah** dalam teks.
+
+Mekanik keras: penenang hanya bekerja pada band **model** ESKALASI dan
+menurunkannya **tepat satu tingkat** ke REVIEW ANALIS; **tidak pernah**
+menghasilkan AUTO-CLOSE; skor tidak berubah; **gugur total** bila
+sinyal kuat S2/S3 aktif atau aturan keamanan terpicu (pesan yang
+dinaikkan aturan tidak bisa diturunkan — arah naik selalu menang).
+
+Hasil terukur (jalur engine app yang sama, sebelum → sesudah):
+
+| Ukuran (set 300) | v3 | v4 |
+|---|---|---|
+| Sah lolos | 16,0% (24/150) | **36,0% (54/150)** |
+| Smishing dieskalasi | 87,3% (131/150) | **87,3% (131/150)** |
+| Smishing AUTO-CLOSE | 0 | **0** |
+| Total lolos | 51,7% (155/300) | **61,7% (185/300)** |
+
+Kategori sah yang terangkat: notifikasi transaksi bank 0→12/15, info
+rekening 0→8/15, OTP bank 0→5/15, kurir paket 0→2/15, e-commerce
+4→6/15, telco 1→2/15. **0 smishing tersentuh penenang** pada desain
+final — iterasi pertama P3 (kata kunci lepas) sempat menenangkan 3
+smishing (87,3%→85,3%) karena "saldo"/"berhasil" juga dipakai sebagai
+umpan; penanda kontekstual + veto umpan hadiah menutupnya tanpa
+mengurangi keuntungan pesan sah. Panel 16 pesan app: sah **1/8 → 3/8**,
+smishing tetap **8/8** (target internal panel ≥4/8 belum tercapai —
+bank panel fiktif sehingga P2 tak bisa menyala, dan frasa tagihan/
+e-statement di luar penanda P3; dilaporkan apa adanya).
+
+**Batas jujur:** penenang hanya menolong pola berformat jelas (±36%
+pesan sah pada set ini). Over-eskalasi model pada teks Indonesia bebas
+tetap ada — obatnya fine-tune dwibahasa dengan data Indonesia berlabel
+(Tahap 2), bukan aturan tambahan.
 
 ---
 
@@ -109,9 +180,9 @@ fp16 untuk model ini), jadi **app tetap fp32**. Penghematan memori
 
 | Berkas | Fungsi |
 |---|---|
-| `app.py` | Antarmuka Streamlit **v3** (Bahasa Indonesia, istilah teknis English): analisis tunggal (batas 2.000 char, kalimat vonis, tombol koreksi + log koreksi sesi), mode batch (progres per pesan, batas 200 baris), ekspor CSV (batch/riwayat/koreksi), tab evaluasi ID, riwayat sesi, panel sinyal, bilah skor |
+| `app.py` | Antarmuka Streamlit **v4** (Bahasa Indonesia, istilah teknis English): analisis tunggal (batas 2.000 char, kalimat vonis, tombol koreksi + log koreksi sesi), mode batch (progres per pesan, batas 200 baris), ekspor CSV (batch/riwayat/koreksi), tab evaluasi ID, riwayat sesi, panel sinyal, bilah skor, lencana sinyal penenang |
 | `triage_core.py` | Logika model murni (tanpa Streamlit): ensemble, kalibrasi temperatur, kebijakan dua ambang, penjelasan faktor |
-| `rules.py` | Lapisan aturan murni regex (tanpa Streamlit): deteksi sinyal teks + aturan kombinasi ≥2 sinyal kuat yang memaksa ESKALASI (hanya menaikkan) |
+| `rules.py` | Lapisan aturan murni regex (tanpa Streamlit): deteksi sinyal teks + aturan kombinasi ≥2 sinyal kuat yang memaksa ESKALASI (hanya menaikkan) + sinyal penenang terbatas (P1/P2/P3) yang menurunkan ESKALASI model satu tingkat ke REVIEW untuk pola resmi berformat jelas |
 | `.streamlit/config.toml` | Tema gelap "fraud ops console" (warna dasar, aksen amber) |
 | `build_artifacts.py` | Skrip pembangunan artefak deploy dari resep notebook + verifikasi angka (sudah dijalankan; jalankan ulang hanya bila resep berubah) |
 | `requirements.txt` | Dependensi (torch diarahkan ke wheel CPU) |

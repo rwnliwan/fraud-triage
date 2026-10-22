@@ -1,12 +1,26 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v3.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v4.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
 dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
-band naik ke ESKALASI — aturan tidak pernah mengubah skor dan tidak pernah
-menurunkan band. Logika model ada di triage_core.py, logika aturan di
-rules.py; keduanya bisa diuji tanpa Streamlit.
+band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
+ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
+tanpa Streamlit.
+
+Baru di v4 (Tahap 1 perbaikan Indonesia — SINYAL PENENANG): baseline set
+evaluasi Indonesia v1 (300 pesan berlabel) membuktikan model mengeskalasi
+84% pesan SAH Indonesia (sah lolos hanya 16,0%) karena register formal
+institusional tak pernah ada di data latihnya — lapisan aturan sendiri
+0x salah tembak. rules.py kini punya arah sebaliknya yang SANGAT
+terbatas: untuk pola resmi berformat sangat jelas (OTP standar tanpa
+tautan; tautan hanya ke domain resmi persis; notifikasi transaksi
+terstruktur tanpa tautan), band ESKALASI model boleh turun TEPAT satu
+tingkat ke REVIEW ANALIS. Penenang tidak pernah menutup otomatis
+(AUTO-CLOSE), tidak mengubah skor, dan gugur total bila sinyal kuat
+S2/S3 aktif atau aturan keamanan terpicu. Detail & angka ukurnya di
+README.md. Ini tambal terukur, bukan obat — perbaikan sejatinya adalah
+fine-tune dwibahasa (Tahap 2).
 
 Baru di v3 (menutup kritik atas v2):
   A. Ekspor CSV: hasil batch, riwayat sesi, dan log koreksi bisa diunduh.
@@ -35,9 +49,9 @@ import pandas as pd
 import streamlit as st
 
 from triage_core import TriageEngine, ZONES
-from rules import apply_rules
+from rules import apply_rules_and_calm
 
-APP_VERSION = "v3"
+APP_VERSION = "v4"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -79,6 +93,11 @@ footer {visibility: hidden;}
   display: inline-block; margin-top: 0.6rem; padding: 0.45rem 0.7rem;
   border-radius: 8px; background: #3a1420; border: 1px solid #ef4444;
   color: #fecaca; font-size: 0.92rem;
+}
+.ft-badge-calm {
+  display: inline-block; margin-top: 0.6rem; padding: 0.45rem 0.7rem;
+  border-radius: 8px; background: #0f2e1d; border: 1px solid #22c55e;
+  color: #bbf7d0; font-size: 0.92rem;
 }
 .ft-modelband {color: #aebad2; font-size: 0.9rem; margin-top: 0.45rem;}
 .ft-bar-wrap {margin: 0.4rem 0 1.1rem 0;}
@@ -255,14 +274,15 @@ def load_engine():
 
 
 def analyze_one(engine, text):
-    """Satu pemeriksaan lengkap: skor model + lapisan aturan."""
+    """Satu pemeriksaan lengkap: skor model + aturan + sinyal penenang."""
     res = engine.triage(text)
-    final_zone, rule = apply_rules(text, res["zone"])
+    final_zone, rule = apply_rules_and_calm(text, res["zone"])
     return {"text": text, "res": res, "rule": rule, "final_zone": final_zone}
 
 
 def _std_record(analysis):
     """Rekaman standar satu pemeriksaan (untuk tabel & ekspor CSV)."""
+    calm = analysis["rule"].get("calm", {})
     return {
         "text": analysis["text"],
         "score": analysis["res"]["p_scam"],
@@ -270,6 +290,8 @@ def _std_record(analysis):
         "zone_final": analysis["final_zone"],
         "rule_triggered": bool(analysis["rule"]["triggered"]),
         "signals": list(analysis["rule"]["active_signals"]),
+        "calm_applied": bool(calm.get("lowered")),
+        "calm_reasons": list(calm.get("reasons", [])),
     }
 
 
@@ -293,6 +315,8 @@ def _export_csv(records, extra_key=None):
             "Band final": r["zone_final"],
             "Aturan terpicu": "Ya" if r["rule_triggered"] else "Tidak",
             "Sinyal aktif": "+".join(r["signals"]),
+            "Sinyal penenang": ("Ya — " + "; ".join(r["calm_reasons"]))
+            if r.get("calm_applied") else "Tidak",
         }
         if extra_key and extra_key in r:
             row[extra_key[0]] = r[extra_key[1]]
@@ -348,6 +372,16 @@ def verdict_sentence(analysis, t_close, t_esc):
             f"berada di zona {res['zone']} — aturan menaikkannya karena "
             f"pola ini hampir tidak pernah dilakukan pengirim sah."
         )
+    calm = rule.get("calm", {})
+    if calm.get("lowered"):
+        return (
+            f"⬇️ Sinyal penenang menurunkan band satu tingkat ke "
+            f"REVIEW ANALIS: {'; '.join(calm['reasons'])}. Skor model "
+            f"{p:.3f} sendiri melewati ambang eskalasi {t_esc:.3f}, "
+            f"tetapi pola pesan ini sangat khas pengirim resmi "
+            f"berformat jelas — analis tetap memeriksanya di antrean "
+            f"biasa; penenang tidak pernah menutup pesan otomatis."
+        )
     if p >= t_esc:
         txt = (f"Skor {p:.3f} melewati ambang eskalasi {t_esc:.3f} → "
                f"pesan diprioritaskan sebagai dugaan scam kuat.")
@@ -375,6 +409,15 @@ def result_card_html(analysis, t_close, t_esc):
             f'{" + ".join(rule["active_signals"])} — '
             f'{"; ".join(rule["reasons"])}. Band dinaikkan oleh lapisan '
             f'aturan; skor model tidak berubah.</div>'
+        )
+    calm = rule.get("calm", {})
+    if calm.get("lowered"):
+        badge = (
+            f'<div class="ft-badge-calm">⬇️ <b>Sinyal penenang:</b> '
+            f'{"; ".join(calm["reasons"])}. Band diturunkan tepat satu '
+            f'tingkat oleh sinyal penenang (ESKALASI → REVIEW ANALIS); '
+            f'skor model tidak berubah dan pesan tidak ditutup '
+            f'otomatis.</div>'
         )
     model_band = ""
     if zone != res["zone"]:
@@ -407,6 +450,20 @@ def signal_panel_md(rule):
         f"{k} {'✅' if v else '▫️'}" for k, v in strong.items())
     lines.append(f"**Sinyal kuat aturan:** {s_txt} → {n_strong}/3 aktif "
                  f"(lapisan aturan memaksa ESKALASI bila ≥ 2 aktif).")
+    calm = rule.get("calm", {})
+    if calm.get("lowered"):
+        lines.append(
+            f"⬇️ **Sinyal penenang aktif:** {'; '.join(calm['reasons'])} "
+            f"→ band diturunkan satu tingkat ke REVIEW ANALIS "
+            f"(tidak pernah AUTO-CLOSE).")
+    elif calm.get("applies"):
+        lines.append(
+            f"⬇️ **Sinyal penenang terdeteksi:** "
+            f"{'; '.join(calm['reasons'])} — tetapi band model bukan "
+            f"ESKALASI, jadi tidak ada perubahan.")
+    else:
+        lines.append("⬇️ **Sinyal penenang:** tidak ada (atau gugur "
+                     "oleh sinyal kuat S2/S3).")
     return "  \n".join(lines)
 
 
@@ -419,8 +476,10 @@ st.markdown("""
   <p>Tempel teks SMS / pesan mencurigakan dan jalankan analisis. Model:
   <b>Ensemble (Top-3 Terkalibrasi)</b> proyek Fraud Triage, kebijakan dua
   ambang <b>t_close = 0,010</b> · <b>t_esc = 0,135</b>, ditambah lapisan
-  aturan kombinasi sinyal kuat yang hanya bisa menaikkan band ke
-  ESKALASI.</p>
+  aturan kombinasi sinyal kuat yang menaikkan band ke ESKALASI dan
+  sinyal penenang terbatas yang dapat menurunkan ESKALASI satu tingkat
+  ke REVIEW ANALIS untuk pola resmi berformat jelas (tidak pernah
+  menutup otomatis).</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -451,8 +510,16 @@ with st.sidebar:
         "**PR-AUC test: 0,986** (arena final notebook).\n\n"
         "**Lapisan aturan:** kombinasi ≥ 2 sinyal kuat (tautan; permintaan "
         "kredensial/bertindak lewat tautan; ancaman + urgensi) memaksa "
-        "band naik ke ESKALASI. Aturan tidak mengubah skor dan tidak "
-        "pernah menurunkan band."
+        "band naik ke ESKALASI. Aturan tidak mengubah skor.\n\n"
+        "**Sinyal penenang (v4, Tahap 1):** pola resmi berformat sangat "
+        "jelas — format OTP standar tanpa tautan, tautan hanya ke domain "
+        "resmi persis, atau notifikasi transaksi terstruktur tanpa "
+        "tautan — boleh menurunkan band ESKALASI model **satu tingkat** "
+        "ke REVIEW ANALIS. Penenang **tidak pernah** menghasilkan "
+        "AUTO-CLOSE dan **gugur total** bila sinyal kuat S2/S3 aktif "
+        "atau aturan terpicu. Batasnya jujur: ia hanya menolong pola "
+        "berformat jelas; over-eskalasi model pada teks Indonesia bebas "
+        "tetap ada sampai model di-fine-tune ulang (Tahap 2)."
     )
     st.markdown("### ⚠️ Keterbatasan (jujur)")
     st.markdown(
@@ -627,6 +694,7 @@ with tab_single:
             "Band model": r["zone_model"],
             "Band final": r["zone_final"],
             "Aturan": "Ya" if r["rule_triggered"] else "Tidak",
+            "Penenang": "Ya" if r.get("calm_applied") else "Tidak",
         } for r in history[::-1]])
         st.dataframe(df_hist, hide_index=True)
         b1, b2 = st.columns(2)
@@ -706,12 +774,14 @@ with tab_batch:
         counts = {"AUTO-CLOSE": 0, "REVIEW ANALIS": 0, "ESKALASI": 0}
         for r in rows:
             counts[r["zone_final"]] += 1
-        m1, m2, m3, m4 = st.columns(4)
+        m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("🟢 AMAN", counts["AUTO-CLOSE"])
         m2.metric("🟡 REVIEW ANALIS", counts["REVIEW ANALIS"])
         m3.metric("🔴 ESKALASI", counts["ESKALASI"])
         m4.metric("⬆️ Kena aturan",
                   sum(1 for r in rows if r["rule_triggered"]))
+        m5.metric("⬇️ Kena penenang",
+                  sum(1 for r in rows if r.get("calm_applied")))
         df_rows = pd.DataFrame([{
             "Pesan": _short(r["text"], 60),
             "Skor": round(r["score"], 3),
@@ -719,6 +789,8 @@ with tab_batch:
             "Band final": r["zone_final"],
             "Aturan terpicu": ("Ya — " + "+".join(r["signals"]))
             if r["rule_triggered"] else "Tidak",
+            "Penenang": ("Ya — " + "; ".join(r["calm_reasons"]))
+            if r.get("calm_applied") else "Tidak",
         } for r in rows])
         st.dataframe(df_rows, hide_index=True)
         st.download_button(
@@ -767,6 +839,9 @@ with tab_eval:
                 "Aturan": ("Ya — " + "+".join(
                     a["rule"]["active_signals"]))
                 if a["rule"]["triggered"] else "Tidak",
+                "Penenang": ("Ya ⬇️ — " + "; ".join(
+                    a["rule"]["calm"]["reasons"]))
+                if a["rule"].get("calm", {}).get("lowered") else "Tidak",
                 "Sesuai": ok,
                 "Status": "✅ Sesuai" if ok else "❌ Tidak sesuai",
             })
@@ -795,6 +870,7 @@ with tab_eval:
             "Band model": r["Band model"],
             "Band final": r["Band final"],
             "Aturan": r["Aturan"],
+            "Penenang": r["Penenang"],
             "Status": r["Status"],
         } for r in eval_rows])
         st.dataframe(df_eval, hide_index=True)

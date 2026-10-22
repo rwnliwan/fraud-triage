@@ -37,6 +37,23 @@ Tiga sinyal kuat aturan:
        dibekukan, ...) DAN kata tekanan waktu (hari ini, segera, dalam
        24 jam, ...) harus hadir bersamaan; salah satu saja bukan S3.
 
+3. SINYAL PENENANG (Tahap 1, v4): arah sebaliknya yang SANGAT terbatas.
+   Baseline set evaluasi Indonesia v1 (300 pesan) menunjukkan model
+   mengeskalasi 84% pesan SAH Indonesia — bukan karena aturannya, melainkan
+   karena register formal-institusional Indonesia tak pernah ia lihat.
+   Untuk pola resmi yang berformat sangat jelas, sinyal penenang boleh
+   menurunkan band ESKALASI model tepat SATU tingkat ke REVIEW ANALIS:
+   - P1 format OTP standar (kode + frasa penjaga "jangan bagikan") tanpa
+     tautan sama sekali;
+   - P2 tautan yang SELURUH host-nya persis domain resmi terkurasi;
+   - P3 notifikasi transaksi terstruktur (nominal Rp + saldo/referensi)
+     tanpa tautan.
+   Mekanik kerasnya: penenang TIDAK PERNAH menghasilkan AUTO-CLOSE, tidak
+   mengubah skor, dan GUGUR TOTAL bila sinyal kuat S2/S3 aktif atau aturan
+   keamanan terpicu — pesan tidak bisa naik dan turun sekaligus; arah naik
+   selalu menang. Ia hanya menolong pola berformat jelas, bukan obat
+   untuk over-eskalasi model secara umum (itu pekerjaan fine-tune).
+
 Modul ini murni regex — tanpa dependensi selain pustaka standar — agar
 bisa diuji berdiri sendiri seperti triage_core.
 """
@@ -288,4 +305,133 @@ def apply_rules(text, model_zone):
     info = evaluate_rules(text)
     info["raised"] = bool(info["triggered"] and model_zone != "ESKALASI")
     final_zone = "ESKALASI" if info["triggered"] else model_zone
+    return final_zone, info
+
+
+# ----------------------------------------------------------------------------
+# Sinyal penenang (Tahap 1) — arah turun yang sangat terbatas
+# ----------------------------------------------------------------------------
+# Domain resmi Indonesia yang dikurasi manual (host harus cocok PERSIS;
+# subdomain resmi diperbolehkan hanya bila host berakhiran domain ini
+# persis, mis. m.bca.co.id). Penambahan domain = keputusan kurasi, bukan
+# tebakan pola: domain mirip-resmi (bca-aman.com, bca.co.id.evil.com)
+# TIDAK lolos uji ini.
+OFFICIAL_DOMAINS = {
+    # Bank besar
+    "bca.co.id", "bri.co.id", "bankmandiri.co.id", "bni.co.id",
+    "cimbniaga.co.id", "danamon.co.id", "permatabank.com",
+    # Telekomunikasi
+    "telkomsel.com", "indosatooredoo.com", "xl.co.id",
+    # Kurir / logistik (jet.co.id = situs resmi J&T Express)
+    "jne.co.id", "jet.co.id", "jnt.co.id", "sicepat.com", "anteraja.id",
+    # E-commerce
+    "tokopedia.com", "shopee.co.id", "bukalapak.com",
+}
+
+# P1 — frasa penjaga khas pesan OTP sah: "jangan" diikuti kata kerja
+# membagikan/memberikan dalam jendela dekat (atau padanan Inggrisnya).
+_GUARD_RE = re.compile(
+    r"\bjangan\b[^.!?\n]{0,60}?\b(?:bagikan|berikan|memberikan|kasih|"
+    r"beritahukan|beri\s*tahu)\b"
+    r"|\bdo\s+not\s+(?:share|give|disclose)\b",
+    re.IGNORECASE,
+)
+# P3 — nominal Rupiah + penanda notifikasi transaksi DALAM KONTEKS
+# pernyataan, bukan kata lepas. Tiga penanda:
+#   (a) pernyataan saldo: "Saldo akhir/tersisa/simpanan/...", "Saldo
+#       ... Anda", "Saldo Rp...", atau "ke/dari/sisa/cek/info saldo";
+#   (b) nomor referensi ("Ref:", "referensi");
+#   (c) "berhasil" transaksional — BUKAN "berhasil" yang langsung
+#       mengikuti nomina kolektif/orang ("ribuan member berhasil" adalah
+#       klaim social-proof smishing, bukan status transaksi).
+# Kata lepas sengaja ditolak: pada pengukuran pertama, "saldo" sebagai
+# kata benda umpan ("memenangkan saldo DompetKu") dan "berhasil"
+# social-proof sempat menenangkan 3 smishing — konteks pernyataan +
+# veto umpan hadiah di bawah menutup celah itu.
+_RP_RE = re.compile(r"\brp\s?\.?\s?\d", re.IGNORECASE)
+_SALDO_STMT_RE = re.compile(
+    r"\bsaldo\s+(?:akhir|tersisa|simpanan|tabungan|penjualan|e-?money)\b"
+    r"|\bsaldo\b[^.!?\n]{0,25}?\banda\b"
+    r"|\bsaldo\s*:?\s*rp\s?\.?\s?\d"
+    r"|\b(?:ke|dari|sisa|cek|info)\s+saldo\b",
+    re.IGNORECASE)
+_REF_RE = re.compile(r"\b(?:ref|referensi)\b", re.IGNORECASE)
+_BERHASIL_TXN_RE = re.compile(
+    r"(?<!\bmember\s)(?<!\bpeserta\s)(?<!\bpengguna\s)(?<!\borang\s)"
+    r"(?<!\bribuan\s)(?<!\bjutaan\s)\bberhasil\b",
+    re.IGNORECASE)
+
+
+def _is_official_domain(host):
+    """True bila host persis domain resmi atau subdomain resminya."""
+    return any(host == d or host.endswith("." + d)
+               for d in OFFICIAL_DOMAINS)
+
+
+def evaluate_calm(text):
+    """Nilai SINYAL PENENANG atas teks (deteksi pola saja, tanpa band).
+
+    Mengembalikan (applies, reasons):
+      applies : True bila salah satu pola penenang P1/P2/P3 cocok DAN
+                tidak ada veto.
+      reasons : daftar alasan Bahasa Indonesia untuk lencana app.
+
+    VETO (gugur total): sinyal kuat S2 (permintaan kredensial / bertindak
+    lewat tautan) atau S3 (ancaman + urgensi) aktif. Dengan S2 & S3 mati,
+    pemicu aturan keamanan (>= 2 sinyal kuat) juga mustahil — jadi pesan
+    yang akan dinaikkan aturan tidak pernah bisa diturunkan penenang.
+    """
+    text = text or ""
+    sig = detect_signals(text)
+    if sig["strong"]["S2"] or sig["strong"]["S3"]:
+        return False, []
+    domains = sig["domains"]
+    reasons = []
+    if not domains:
+        # Tanpa tautan sama sekali: kandidat P1 / P3.
+        if _OTP_MENTION_RE.search(text) and _GUARD_RE.search(text):
+            reasons.append(
+                "format OTP standar tanpa tautan (kode + frasa penjaga "
+                "'jangan bagikan')")
+        # P3 gugur bila teks memuat umpan hadiah/undian/gratis: notifikasi
+        # transaksi resmi tidak pernah mengiming-imingi hadiah. (Veto ini
+        # menutup smishing samaran struk berisi "Ref:" + "GRATIS PULSA".)
+        prize = any(it["key"] == "prize" and it["detected"]
+                    for it in sig["items"])
+        if (not prize and _RP_RE.search(text)
+                and (_SALDO_STMT_RE.search(text) or _REF_RE.search(text)
+                     or _BERHASIL_TXN_RE.search(text))):
+            reasons.append(
+                "notifikasi transaksi terstruktur tanpa tautan "
+                "(nominal Rp + pernyataan saldo/referensi)")
+    elif all(_is_official_domain(d) for d in domains):
+        # Ada tautan, tetapi SELURUH host-nya domain resmi persis.
+        reasons.append(
+            "tautan hanya ke domain resmi (" + ", ".join(domains) +
+            "), tanpa permintaan kredensial / ancaman")
+    return bool(reasons), reasons
+
+
+def apply_rules_and_calm(text, model_zone):
+    """Aturan keamanan + sinyal penenang di atas band model.
+
+    Urutan & mekanik keras:
+      1. Aturan keamanan berjalan seperti biasa (hanya menaikkan).
+      2. Penenang hanya bekerja bila band MODEL adalah ESKALASI dan
+         aturan TIDAK terpicu -> final turun tepat satu tingkat ke
+         REVIEW ANALIS. Tidak pernah menghasilkan AUTO-CLOSE, tidak
+         mengubah skor, dan tidak menyentuh band REVIEW/AUTO-CLOSE.
+
+    Mengembalikan (final_zone, rule_info); rule_info ditambah kunci
+    "calm": {"applies": pola penenang cocok, "reasons": [...],
+             "lowered": True bila penenang benar-benar menurunkan band}.
+    """
+    final_zone, info = apply_rules(text, model_zone)
+    applies, reasons = evaluate_calm(text)
+    lowered = bool(applies and model_zone == "ESKALASI"
+                   and not info["triggered"])
+    if lowered:
+        final_zone = "REVIEW ANALIS"
+    info["calm"] = {"applies": applies, "reasons": reasons,
+                    "lowered": lowered}
     return final_zone, info
