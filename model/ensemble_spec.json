@@ -1,0 +1,19 @@
+{
+  "kind": "ensemble",
+  "chosen_name": "Ensemble (Top-3 Terkalibrasi)",
+  "members": [
+    "DistilBERT multilingual (fine-tune)",
+    "TF-IDF + Fitur Angka + Logistic Regression",
+    "TF-IDF + Logistic Regression"
+  ],
+  "temperatures": {
+    "DistilBERT multilingual (fine-tune)": 1.183988666972842,
+    "TF-IDF + Fitur Angka + Logistic Regression": 0.9262499394248463,
+    "TF-IDF + Logistic Regression": 0.613717110567477
+  },
+  "ensemble_temperature": 1.0,
+  "t_close": 0.01,
+  "t_esc": 0.135,
+  "max_len": 64,
+  "bert_base": "distilbert/distilbert-base-multilingual-cased"
+}

@@ -1,0 +1,14 @@
+# Fraud Triage — dependensi untuk Streamlit Community Cloud.
+# Baris index CPU di bawah membuat pip mengambil wheel torch versi CPU
+# (jauh lebih kecil dari wheel CUDA bawaan PyPI) — penting agar build
+# di Streamlit Cloud tidak kegemukan.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+streamlit>=1.37
+scikit-learn>=1.5,<2
+scipy>=1.13
+numpy>=1.26
+pandas>=2.0
+joblib>=1.3
+torch>=2.2,<2.7
+transformers>=4.46,<6
