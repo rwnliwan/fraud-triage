@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v6.1.0.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v6.1.1.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,14 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v6.1.1 (penyelarasan vonis Perjalanan Riset): bingkai
+vonis gerbang Tahap 2C & 2D di tab Perjalanan Riset kini memakai
+tiga status berbasis CI Wilson 95% (lolos jelas / tidak
+meyakinkan / gagal jelas) seperti Laporan Edisi v3.3, menggantikan
+bingkai biner lama ("gagal tipis"). Kronologi, angka, dan
+keputusan akhir tidak berubah. Perubahan di journey.py +
+results.json (kolom vonis 2C/2D) — termuat pada reboot berikutnya.
 
 Baru di v6.1.0 (SISKAMLING DIGITAL — kejujuran klaim & bahasa
 layanan; tindak lanjut kritik eksternal atas Laporan v3.2): model,
@@ -264,7 +272,7 @@ from journey import render_journey
 from siskamling import render_lapor_tab, render_gallery_tab, \
     render_admin_tab
 
-APP_VERSION = "v6.1.0"
+APP_VERSION = "v6.1.1"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV

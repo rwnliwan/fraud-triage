@@ -85,8 +85,8 @@ _VONIS_SINGKAT = {
     "1": "DITERIMA — app v4",
     "2a": "SELESAI — korpus lolos gerbang",
     "2b": "SELESAI — overfit epoch 2 tercatat",
-    "2c": "DITOLAK — gagal tipis",
-    "2d": "DITOLAK — 2/4 gerbang",
+    "2c": "DITOLAK — belum meyakinkan",
+    "2d": "DITOLAK — SMISHING gagal jelas",
 }
 
 # Urutan tampil gabungan tahap berkunci gerbang + tahap persiapan
@@ -293,6 +293,17 @@ def render_journey():
         "(mis. investasi_bodong 93,3% → 73,3%) — trade-off yang membuat "
         "gerbang SMISHING 2D gagal.")
 
+    st.markdown(
+        "ℹ️ **Bingkai vonis tiga status (sejak Laporan Edisi v3.3).** "
+        "Vonis gerbang Tahap 2C & 2D kini dibaca dengan tiga status "
+        "berbasis interval kepercayaan Wilson 95% — **lolos jelas** "
+        "(seluruh CI di atas gerbang), **tidak meyakinkan** (CI "
+        "bersinggungan dengan gerbang), **gagal jelas** (seluruh CI di "
+        "bawah gerbang) — sesudah kritik eksternal atas bingkai biner "
+        "lama (“gagal tipis”). PR-AUC dinilai sebagai titik estimasi "
+        "(bukan proporsi, jadi tanpa CI). Kronologi, angka, dan "
+        "keputusan akhir setiap tahap tidak berubah: kedua paket "
+        "tetap DITOLAK dan model app tidak ditukar.")
     st.markdown("#### Detail per tahap")
     for s in semua:
         warna = _WARNA.get(s["warna_vonis"], "#8fa1c0")
