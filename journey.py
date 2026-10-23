@@ -21,6 +21,7 @@ Tahap 2C vs 2D dari `kategori_heatmap` di results.json.
 
 import json
 import os
+from functools import lru_cache
 
 import streamlit as st
 
@@ -44,7 +45,11 @@ def _fmt_auc(v):
     return f"{v:.4f}".replace(".", ",")
 
 
+@lru_cache(maxsize=1)
 def _load_results():
+    # results.json statis selama proses server berjalan (berubah hanya
+    # lewat deploy ulang) — cache proses agar tidak dibaca ulang dari
+    # disk pada setiap rerun penuh Streamlit.
     with open(os.path.join(_HERE, "results.json"), encoding="utf-8") as f:
         return json.load(f)
 

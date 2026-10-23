@@ -33,6 +33,16 @@ reports.enrichment (info pendukung verifikasi, bukan penentu label).
 label_log (jejak audit label) + tinjauan kedua buta atas sampel acak
 terverifikasi — yang cocok menjadi "subset emas" (tampil di Analitik).
 
+Baru di v6.1.0 (tindak lanjut kritik eksternal atas laporan v3.2):
+(1) label vonis warga "HAMPIR PASTI PENIPUAN" hanya tampil bila
+lapisan aturan keras terpicu — band ESKALASI dari skor model saja
+memakai label yang dilunakkan ("polanya sangat mirip penipuan") plus
+peringatan khusus pesan berformat resmi untuk band menengah/atas
+tanpa sinyal aturan; (2) expander "Kebijakan privasi & retensi data"
+di tab Lapor (PRIVACY_TEXT_V1) — isinya diverifikasi dari kode:
+gambar OCR hanya diproses di memori dan tidak pernah disimpan,
+hak hapus saat ini berupa penandaan status (dinyatakan apa adanya).
+
 Konfigurasi (Streamlit secrets ATAU env; lokal: berkas mode 600
 ~/.config/turso/siskamling-digital.env):
     TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, SISKAMLING_SENDER_SALT
@@ -110,6 +120,77 @@ def consent_text_hash() -> str:
     """SHA-256 teks persetujuan persis seperti yang tampil di formulir."""
     payload = CONSENT_TEXT_V1 + "\n\n" + CONSENT_CHECKBOX_V1
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+# Kebijakan privasi & retensi (v6.1.0, tindak lanjut kritik eksternal
+# butir 2.7). SETIAP klaim di teks ini diverifikasi dari kode layanan
+# sendiri (submit_report, ocr_image_to_text, skema basis data) —
+# jangan mengubah isinya tanpa memeriksa kode lagi:
+#   * yang ditulis ke basis data HANYA teks ter-scrub (submit_report
+#     menjalankan scrub() sebelum INSERT; teks mentah tidak pernah
+#     ditulis), kanal, tanggal, skor/band model, sinyal aktif,
+#     sender_hash (hash bergaram satu arah), text_hash, dan ringkasan
+#     pengayaan domain.
+#   * gambar OCR diproses di memori saja (io.BytesIO di
+#     ocr_image_to_text) dan tidak pernah ditulis ke cakram / basis
+#     data; yang mengalir lanjut hanya teks bacaannya.
+#   * pengayaan RDAP hanya mengirim NAMA DOMAIN ke rdap.org.
+#   * hak hapus saat ini = hapus lunak (delete_report: status
+#     'deleted' + gallery_visible=0) — baris keluar dari galeri dan
+#     view corpus_export, tetapi penghapusan fisik permanen BELUM
+#     terimplementasi; teks di bawah menyatakannya apa adanya.
+PRIVACY_TEXT_V1 = (
+    "**Ringkasan kebijakan privasi & retensi** — ditulis merujuk "
+    "UU No. 27 Tahun 2022 tentang Pelindungan Data Pribadi (UU PDP), "
+    "dan isinya adalah keadaan layanan yang sebenarnya:\n\n"
+    "**Yang disimpan dari laporan Anda:** isi pesan **setelah "
+    "dibersihkan otomatis** dari data pribadi yang terdeteksi "
+    "(nomor telepon, tautan pribadi, nomor rekening, dan sejenisnya) "
+    "— teks asli sebelum dibersihkan **tidak pernah ditulis** ke "
+    "basis data; kanal pesan dan tanggal laporan; skor serta band "
+    "penilaian otomatis; dan sinyal aturan yang aktif. Bila Anda "
+    "mengisi nomor pengirim, yang disimpan hanya **kode hash satu "
+    "arah bergaram** — bukan nomornya, dan tidak bisa dikembalikan "
+    "menjadi nomor. Formulir ini tidak meminta nama atau identitas "
+    "Anda.\n\n"
+    "**Gambar tangkapan layar TIDAK disimpan.** Fitur baca gambar "
+    "(OCR) memproses gambar hanya di memori server untuk membaca "
+    "teksnya, lalu gambar dibuang — tidak ditulis ke cakram maupun "
+    "basis data. Yang masuk ke alur laporan hanyalah teks hasil "
+    "bacaan, sesudah Anda periksa dan betulkan sendiri.\n\n"
+    "**Pengayaan domain:** umur domain tautan di dalam pesan "
+    "diperiksa ke layanan RDAP publik (rdap.org). Yang dikirim ke "
+    "layanan itu **hanya nama domainnya** — bukan isi pesan, bukan "
+    "nomor Anda, bukan konteks laporan.\n\n"
+    "**Dasar pemrosesan:** persetujuan Anda. Mencari hasil cek dan "
+    "mengirim laporan adalah permintaan Anda sendiri; pemakaian "
+    "laporan untuk galeri anonim dan data latih hanya berjalan bila "
+    "Anda mencentang persetujuan pada formulir (tercatat versinya di "
+    "log persetujuan). Menolak tidak menghalangi Anda memakai fitur "
+    "cek.\n\n"
+    "**Lokasi penyimpanan:** basis data layanan berada di **Tokyo, "
+    "Jepang** (layanan basis data Turso) — artinya isi laporan "
+    "tersimpan di luar Indonesia. Isinya sudah dibersihkan dari data "
+    "pribadi yang terdeteksi dan tidak memuat identitas Anda. Salinan "
+    "cadangan berkala disimpan maksimal **8 minggu** untuk keamanan "
+    "data.\n\n"
+    "**Berapa lama disimpan (retensi):** laporan disimpan selama "
+    "layanan berjalan atau sampai dihapus atas permintaan / "
+    "keputusan pengelola; saat ini **belum ada penghapusan otomatis "
+    "berdasarkan umur laporan**.\n\n"
+    "**Hak Anda:** (1) mengetahui status laporan Anda — gunakan "
+    "fitur **🔎 Lacak laporan saya** dengan nomor laporan Anda; "
+    "(2) meminta laporan Anda **dihapus** — sampaikan nomor laporan "
+    "Anda kepada pengelola layanan. Laporan yang dihapus tidak "
+    "tampil di galeri dan tidak pernah masuk data latih. Jujur soal "
+    "mekaniknya: penghapusan saat ini berupa **penandaan status** di "
+    "basis data; penghapusan fisik permanen adalah penyempurnaan "
+    "yang masih kami kerjakan.\n\n"
+    "**Batas pembersihan otomatis:** pembersih bekerja dengan pola "
+    "(regex) dan bisa luput pada nama atau alamat yang tertulis "
+    "bebas di dalam teks. Jangan menambahkan data pribadi Anda "
+    "sendiri ke kolom pesan, di luar isi pesan yang Anda terima."
+)
 
 
 # Peta band final app -> nilai kolom reports.model_band (CHECK di schema)
@@ -672,15 +753,54 @@ def fetch_gallery(cfg: dict, limit: int = 30) -> list:
 
 
 def fetch_public_stats(cfg: dict) -> dict:
-    """Agregat aman-publik untuk kepala galeri."""
-    total = turso_execute(cfg, "SELECT COUNT(*) AS n FROM reports")[0]["n"]
-    verified = turso_execute(
-        cfg, "SELECT COUNT(*) AS n FROM reports "
-             "WHERE status = 'verified'")[0]["n"]
-    senders = turso_execute(
-        cfg, "SELECT COUNT(DISTINCT sender_hash) AS n FROM reports "
-             "WHERE sender_hash IS NOT NULL")[0]["n"]
-    return {"total": total, "verified": verified, "senders": senders}
+    """Agregat aman-publik untuk kepala galeri.
+
+    Dulu tiga statement terpisah = tiga perjalanan HTTP ke Turso
+    (±0,9–1,2 dtk per perjalanan secara lokal); kini SATU statement
+    dengan subquery skalar — hasil identik, satu perjalanan."""
+    row = turso_execute(
+        cfg,
+        "SELECT (SELECT COUNT(*) FROM reports) AS total, "
+        "(SELECT COUNT(*) FROM reports WHERE status = 'verified') "
+        "AS verified, "
+        "(SELECT COUNT(DISTINCT sender_hash) FROM reports "
+        "WHERE sender_hash IS NOT NULL) AS senders")[0]
+    return {"total": row["total"], "verified": row["verified"],
+            "senders": row["senders"]}
+
+
+# Cache pendek untuk data publik: statistik & galeri dibaca pada
+# SETIAP run penuh (hero tab Lapor + tab Galeri mengeksekusi walau
+# tidak sedang dibuka), dan isinya hanya berubah saat ada laporan /
+# verifikasi baru — TTL 60 dtk membuat rerun interaksi warga tidak
+# membayar ulang perjalanan Turso yang sama. Kunci cache = URL basis
+# data (bukan kredensial); cfg diteruskan sebagai argumen tak-terhash.
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_public_stats(_cfg: dict, scope: str) -> dict:
+    return fetch_public_stats(_cfg)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_gallery(_cfg: dict, scope: str, limit: int = 30) -> list:
+    return fetch_gallery(_cfg, limit)
+
+
+def fetch_lapor_state(cfg: dict) -> dict:
+    """Status intake tab Lapor dalam SATU statement: kill switch,
+    flag Turnstile, dan jumlah pending (dulu 3 statement terpisah =
+    3 perjalanan HTTP sebelum formulir warga selesai digambar)."""
+    rows = turso_execute(
+        cfg,
+        "SELECT (SELECT value FROM app_config WHERE key = "
+        "'intake_open') AS intake_open, "
+        "(SELECT value FROM app_config WHERE key = 'turnstile_on') "
+        "AS turnstile_on, "
+        "(SELECT COUNT(*) FROM reports WHERE status = 'pending') "
+        "AS pending_count")
+    row = rows[0] if rows else {}
+    return {"intake_open": row.get("intake_open") != "0",
+            "pending": int(row.get("pending_count") or 0),
+            "turnstile_on": row.get("turnstile_on") == "1"}
 
 
 def fmt_wita(utc_text: str | None) -> str:
@@ -707,7 +827,7 @@ def _render_hero(cfg: dict, db_ready: bool) -> None:
         "modus yang sama.")
     if db_ready:
         try:
-            stats = fetch_public_stats(cfg)
+            stats = _cached_public_stats(cfg, cfg.get("url") or "")
             if stats["verified"] or stats["total"]:
                 st.caption(
                     f"🏘️ Sudah ada **{stats['verified']} modus "
@@ -732,14 +852,37 @@ def render_citizen_verdict(analysis: dict) -> None:
     Zona model dipetakan ke tiga tingkat (merah/kuning/hijau) dengan
     tindakan konkret; bahasanya awam dan tidak melebih-lebihkan —
     detail teknis (skor, sinyal) tersedia di expander sesudahnya.
+
+    v6.1.0 (tindak lanjut kritik eksternal atas laporan v3.2, butir
+    2.5): label tegas "HAMPIR PASTI PENIPUAN" kini HANYA tampil bila
+    lapisan aturan keras benar-benar terpicu (>= 2 sinyal kuat S1/S2/
+    S3). Bila band ESKALASI datang dari skor model saja, labelnya
+    dilunakkan — skor mesin bukan vonis pasti — dan untuk band
+    menengah/atas tanpa sinyal aturan ditambah peringatan khusus
+    pesan berformat resmi (model paling sering salah justru pada
+    pesan resmi bank/lembaga). Skor, ambang, dan band TIDAK berubah;
+    yang berubah hanya bahasanya.
     """
     zone = analysis["final_zone"]
-    signals = [SIGNAL_WARGA[s] for s in analysis["rule"]["active_signals"]
+    rule = analysis["rule"]
+    hard_fired = bool(rule["triggered"])
+    signals = [SIGNAL_WARGA[s] for s in rule["active_signals"]
                if s in SIGNAL_WARGA]
     if zone == "ESKALASI":
-        st.error(
-            "🔴 **HAMPIR PASTI PENIPUAN.** Jangan klik tautan apa pun "
-            "di pesan ini dan jangan membalasnya.")
+        if hard_fired:
+            st.error(
+                "🔴 **HAMPIR PASTI PENIPUAN.** Pesan ini memuat "
+                "kombinasi tanda bahaya terkuat (lihat tanda bahaya "
+                "di bawah). Jangan klik tautan apa pun di pesan ini "
+                "dan jangan membalasnya.")
+        else:
+            st.error(
+                "🔴 **POLANYA SANGAT MIRIP PENIPUAN.** Penilaian "
+                "otomatis atas pesan ini sangat tinggi — tetapi ini "
+                "skor mesin, bukan vonis pasti. Perlakukan seperti "
+                "penipuan: jangan klik tautan apa pun di pesan ini, "
+                "jangan membalasnya, dan verifikasi lewat kanal resmi "
+                "(lihat catatan di bawah).")
         st.markdown(
             "- ⛔ **Jangan pernah berikan kode OTP, PIN, atau kata "
             "sandi** — bank dan e-wallet TIDAK PERNAH memintanya lewat "
@@ -769,6 +912,15 @@ def render_citizen_verdict(analysis: dict) -> None:
             "Jangan kirim uang atau kode hanya karena sebuah pesan "
             "lolos cek — penipu terus berganti modus. Bila ragu, "
             "tanyakan dulu ke orang yang kamu percaya.")
+    if zone in ("ESKALASI", "REVIEW ANALIS") and not hard_fired:
+        st.info(
+            "⚠️ **Catatan pesan berformat resmi:** pemeriksa ini "
+            "belum andal menilai pesan resmi bank/lembaga — modelnya "
+            "justru paling sering salah pada pesan berformat resmi. "
+            "Bila pesan ini mengaku dari bank atau instansi Anda, "
+            "jangan putuskan hanya dari hasil ini: buka aplikasi "
+            "resminya sendiri (ketik manual) atau telepon nomor resmi "
+            "di kartu / situs resmi lembaga tersebut.")
     if signals:
         st.markdown("**Tanda bahaya yang ditemukan:** "
                     + "; ".join(signals) + ".")
@@ -927,6 +1079,8 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
     _render_hero(cfg, db_ready)
     with st.expander("Baca dulu — cara kerja, data & persetujuan (v1)"):
         st.markdown(CONSENT_TEXT_V1)
+    with st.expander("🔐 Kebijakan privasi & retensi data"):
+        st.markdown(PRIVACY_TEXT_V1)
 
     if not db_ready:
         st.warning(
@@ -940,9 +1094,11 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
     ts_active = False
     if db_ready:
         try:
-            intake_is_open = intake_open(cfg)
-            queue_full = count_status(cfg, "pending") >= MAX_PENDING_OPEN
-            ts_active = turnstile_active(cfg)
+            state = fetch_lapor_state(cfg)
+            intake_is_open = state["intake_open"]
+            queue_full = state["pending"] >= MAX_PENDING_OPEN
+            ts_active = (turnstile_keys_present(cfg)
+                         and state["turnstile_on"])
         except Exception:
             intake_is_open, queue_full, ts_active = True, False, False
     if db_ready and not intake_is_open:
@@ -1157,8 +1313,8 @@ def render_gallery_tab() -> None:
                 "belum terhubung).")
         return
     try:
-        stats = fetch_public_stats(cfg)
-        rows = fetch_gallery(cfg)
+        stats = _cached_public_stats(cfg, cfg.get("url") or "")
+        rows = _cached_gallery(cfg, cfg.get("url") or "")
     except Exception as exc:
         st.error(f"Galeri belum bisa dimuat: {exc}")
         return

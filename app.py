@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v6.0.0.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v6.1.0.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,22 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v6.1.0 (SISKAMLING DIGITAL — kejujuran klaim & bahasa
+layanan; tindak lanjut kritik eksternal atas Laporan v3.2): model,
+skor, dan ambang TIDAK berubah sama sekali. (1) Vonis bahasa warga
+di tab Lapor & Cek dilunakkan bila band ESKALASI hanya dipicu skor
+model: label "HAMPIR PASTI PENIPUAN" kini khusus untuk pesan yang
+memicu lapisan aturan keras (>= 2 sinyal kuat); selain itu labelnya
+"POLANYA SANGAT MIRIP PENIPUAN" + anjuran verifikasi kanal resmi,
+dan band menengah/atas tanpa sinyal aturan mendapat peringatan
+khusus bahwa pemeriksa belum andal untuk pesan berformat resmi
+bank/lembaga. (2) Tab Lapor mendapat expander "Kebijakan privasi &
+retensi data" (UU PDP) yang isinya diverifikasi dari kode —
+termasuk pernyataan bahwa gambar OCR hanya diproses di memori dan
+tidak pernah disimpan, serta kejujuran bahwa hak hapus saat ini
+berupa penandaan status. Semua perubahan di siskamling.py —
+termuat pada reboot berikutnya.
 
 Baru di v5.4.0 (Perjalanan Riset lengkap): Tahap 2A (korpus) & 2B
 (fine-tune) kini berdiri sendiri di alur dan detail — sebelumnya
@@ -236,19 +252,19 @@ Jalankan lokal:  streamlit run app.py
 Deploy: lihat README.md (Streamlit Community Cloud).
 """
 
+import json
 import os
 from datetime import datetime
 
-import pandas as pd
 import streamlit as st
 
-from triage_core import TriageEngine, ZONES
+from triage_core import TriageEngine, ZONES, resolve_bert_source
 from rules import apply_rules_and_calm, _SIGNAL_NAMES
 from journey import render_journey
 from siskamling import render_lapor_tab, render_gallery_tab, \
     render_admin_tab
 
-APP_VERSION = "v6.0.0"
+APP_VERSION = "v6.1.0"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -571,8 +587,8 @@ ID_EVAL_SET = [
 ]
 
 
-@st.cache_resource(show_spinner="Memuat ensemble (termasuk DistilBERT)…")
-def load_engine():
+def _engine_config():
+    """Konfigurasi sumber model dari secrets/env (tanpa memuat model)."""
     bert_source = None
     artifact_repo_id = None
     try:
@@ -585,10 +601,93 @@ def load_engine():
     bert_source = bert_source or os.environ.get("BERT_MODEL_PATH") \
         or os.environ.get("BERT_MODEL_ID")
     artifact_repo_id = artifact_repo_id or os.environ.get("ARTIFACT_REPO_ID")
+    return bert_source, artifact_repo_id
+
+
+@st.cache_resource(show_spinner="Memuat ensemble (termasuk DistilBERT)…")
+def load_engine():
+    bert_source, artifact_repo_id = _engine_config()
     # Mesin tetap fp32: uji float16 (v3) gagal batas adopsi latensi —
     # lihat README.md bagian performa.
     return TriageEngine(bert_source=bert_source,
                         artifact_repo_id=artifact_repo_id)
+
+
+def _engine_load_failed(exc):
+    """Pesan gagal-muat yang sama seperti perilaku lama (gerbang awal)."""
+    st.error(f"Model belum bisa dimuat: {exc}")
+    st.info("Secara bawaan app mengunduh seluruh artefak model dari repo "
+            "Hugging Face publik rwnliwan/fraud-triage-smishing — "
+            "periksa koneksi keluar app, atau set secrets opsional "
+            "ARTIFACT_REPO_ID / BERT_MODEL_ID ke repo lain. "
+            "Lihat README.md.")
+    st.stop()
+
+
+_SPEC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "model", "ensemble_spec.json")
+
+
+def _local_spec():
+    """Spec ensemble dari berkas lokal (murah; tanpa memuat bobot)."""
+    try:
+        with open(_SPEC_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+class _LazyEngine:
+    """Proxy mesin triase: bobot model TIDAK dimuat saat halaman dibuka.
+
+    Profil lokal 2026-10-23: membangun TriageEngine sungguhan memakan
+    ±10 dtk hangat (±40 dtk dingin: impor torch/transformers, unpickle
+    anggota sklearn, muat DistilBERT) dan dulu terjadi SEBELUM tab
+    pertama digambar — seluruh halaman menunggu model. Kini ambang
+    dibaca dari spec lokal dan sumber bobot diresolusi tanpa memuat
+    apa pun; TriageEngine asli (ter-cache_resource) baru dibangun pada
+    analisis pertama, dengan spinner yang sama seperti sebelumnya.
+    Atribut lain (members, spec, …) diteruskan ke mesin asli.
+    """
+
+    def __init__(self):
+        self._real = None
+        self._spec = _local_spec()
+
+    def _load(self):
+        if self._real is None:
+            try:
+                self._real = load_engine()
+            except Exception as exc:
+                _engine_load_failed(exc)
+        return self._real
+
+    @property
+    def t_close(self):
+        if self._spec:
+            return float(self._spec["t_close"])
+        return self._load().t_close
+
+    @property
+    def t_esc(self):
+        if self._spec:
+            return float(self._spec["t_esc"])
+        return self._load().t_esc
+
+    @property
+    def bert_source(self):
+        if self._real is not None:
+            return self._real.bert_source
+        bert_source, artifact_repo_id = _engine_config()
+        return resolve_bert_source(bert_source, artifact_repo_id)
+
+    def triage(self, text):
+        return self._load().triage(text)
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._load(), name)
 
 
 def analyze_one(engine, text):
@@ -682,6 +781,7 @@ def _export_csv(records, extra_key=None):
     Aturan terpicu, Sinyal aktif (+ kolom ekstra bila diminta,
     mis. band koreksi pengguna pada log koreksi).
     """
+    import pandas as pd  # malas: hanya untuk ekspor CSV & tabel hasil
     rows = []
     for r in records:
         row = {
@@ -920,16 +1020,12 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-try:
-    engine = load_engine()
-except Exception as exc:  # bobot BERT belum tersedia di lingkungan ini
-    st.error(f"Model belum bisa dimuat: {exc}")
-    st.info("Secara bawaan app mengunduh seluruh artefak model dari repo "
-            "Hugging Face publik rwnliwan/fraud-triage-smishing — "
-            "periksa koneksi keluar app, atau set secrets opsional "
-            "ARTIFACT_REPO_ID / BERT_MODEL_ID ke repo lain. "
-            "Lihat README.md.")
-    st.stop()
+# Mesin dimuat MALAS lewat proxy: halaman + formulir warga tampil
+# dulu; bobot ensemble baru dibangun pada analisis pertama (profil:
+# ±10 dtk hangat / ±40 dtk dingin — dulu angka itu memblokir tab
+# pertama). Bila pembangunan gagal, pesan galatnya sama seperti
+# gerbang lama lewat _engine_load_failed().
+engine = _LazyEngine()
 
 # ---------------------------------------------------------------------------
 # Sidebar v5.2: kartu status ringkas + dropdown detail
@@ -1130,6 +1226,7 @@ with tab_single:
 
     analysis = st.session_state.get("last")
     if analysis:
+        import pandas as pd  # malas: hanya saat ada hasil untuk ditabelkan
         res = analysis["res"]
         col_main, col_sig = st.columns([3, 2])
         with col_main:
@@ -1226,6 +1323,7 @@ with tab_single:
     st.markdown("### 🕘 Riwayat sesi")
     history = st.session_state["history"]
     if history:
+        import pandas as pd  # malas: hanya saat riwayat tidak kosong
         df_hist = pd.DataFrame([{
             "Waktu": r["Waktu"],
             "Pesan": _short(r["text"], 70),
@@ -1253,6 +1351,7 @@ with tab_single:
     st.markdown("### 📝 Log koreksi sesi ini")
     feedback = st.session_state["feedback"]
     if feedback:
+        import pandas as pd  # malas: hanya saat log koreksi tidak kosong
         df_fb = pd.DataFrame([{
             "Waktu": r["Waktu"],
             "Pesan": _short(r["text"], 60),
@@ -1314,6 +1413,7 @@ with tab_batch:
 
     rows = st.session_state.get("batch_rows")
     if rows:
+        import pandas as pd  # malas: hanya saat hasil batch ada
         counts = {"AUTO-CLOSE": 0, "REVIEW ANALIS": 0, "ESKALASI": 0}
         for r in rows:
             counts[r["zone_final"]] += 1
@@ -1452,6 +1552,7 @@ with tab_eval:
 
     eval_rows = st.session_state.get("id_eval_rows")
     if eval_rows:
+        import pandas as pd  # malas: hanya saat hasil evaluasi ada
         sah = [r for r in eval_rows if r["Label harapan"] == "SAH"]
         smi = [r for r in eval_rows if r["Label harapan"] == "SMISHING"]
         sah_ok = sum(1 for r in sah if r["Sesuai"])
@@ -1541,6 +1642,7 @@ with tab_eval:
 
     sim_base = st.session_state.get("threshold_sim_base")
     if sim_base:
+        import pandas as pd  # malas: hanya untuk tabel dampak simulator
         with st.container(border=True):
             c_close, c_esc = st.columns(2)
             sim_close = c_close.slider(
