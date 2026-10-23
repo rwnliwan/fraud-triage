@@ -78,9 +78,15 @@ def _gerbang_lines(stage, gates):
 _VONIS_SINGKAT = {
     "0": "BASELINE",
     "1": "DITERIMA — app v4",
+    "2a": "SELESAI — korpus lolos gerbang",
+    "2b": "SELESAI — overfit epoch 2 tercatat",
     "2c": "DITOLAK — gagal tipis",
     "2d": "DITOLAK — 2/4 gerbang",
 }
+
+# Urutan tampil gabungan tahap berkunci gerbang + tahap persiapan
+# (v5.4.0: 2A & 2B berdiri sendiri di antara Tahap 1 dan 2C).
+_URUTAN = {"0": 0, "1": 1, "2a": 2, "2b": 3, "2c": 4, "2d": 5}
 
 _CSS = """
 <style>
@@ -115,6 +121,12 @@ def _flow_html(stages):
     for s in stages:
         warna = _WARNA.get(s["warna_vonis"], "#8fa1c0")
         singkat = _VONIS_SINGKAT.get(s["id"], s["vonis"])
+        if s.get("sah") is not None:
+            bawah = (f'SAH {_fmt_pct(s["sah"])} · '
+                     f'SMISHING {_fmt_pct(s["smishing"])}')
+        else:
+            # Tahap persiapan (2A/2B): tidak punya skor gerbang.
+            bawah = "Tahap persiapan — tanpa skor gerbang"
         boxes.append(
             f'<div class="jr-box" style="border-top:4px solid {warna};">'
             f'<div style="color:#8fa1c0; font-size:0.78rem;">'
@@ -124,8 +136,7 @@ def _flow_html(stages):
             f'<div style="color:{warna}; font-size:0.88rem; '
             f'font-weight:700;">{singkat}</div>'
             f'<div style="color:#c6d0e4; font-size:0.85rem; '
-            f'margin-top:0.4rem;">SAH {_fmt_pct(s["sah"])} · '
-            f'SMISHING {_fmt_pct(s["smishing"])}</div></div>')
+            f'margin-top:0.4rem;">{bawah}</div></div>')
     panah = '<div class="jr-arrow">➜</div>'
     return '<div class="jr-flow">' + panah.join(boxes) + "</div>"
 
@@ -207,6 +218,11 @@ def render_journey():
     data = _load_results()
     gates = data["gates"]
     stages = data["stages"]
+    # v5.4.0: gabung tahap persiapan (2A/2B) ke alur & detail, sesuai
+    # urutan kronologis. Bar gerbang & PR-AUC tetap hanya dari `stages`
+    # (paket model utuh yang memang dinilai gerbang).
+    semua = sorted(stages + data.get("persiapan", []),
+                   key=lambda s: _URUTAN.get(s["id"], 99))
 
     st.markdown(_CSS, unsafe_allow_html=True)
     st.markdown("### 🧪 Perjalanan Riset — semua tahap, termasuk yang ditolak")
@@ -230,7 +246,7 @@ def render_journey():
         f"- Smishing AUTO-CLOSE = {gates['auto_close']}")
 
     st.markdown("#### Alur tahapan")
-    st.markdown(_flow_html(stages), unsafe_allow_html=True)
+    st.markdown(_flow_html(semua), unsafe_allow_html=True)
 
     st.markdown("#### Skor gerbang per tahap (set hakim 300, full-stack)")
     st.markdown(_bars_html(stages, gates), unsafe_allow_html=True)
@@ -273,7 +289,7 @@ def render_journey():
         "gerbang SMISHING 2D gagal.")
 
     st.markdown("#### Detail per tahap")
-    for s in stages:
+    for s in semua:
         warna = _WARNA.get(s["warna_vonis"], "#8fa1c0")
         with st.expander(
                 f"Tahap {s['id']} — {s['nama']} · {s['tanggal']}"):
@@ -282,7 +298,19 @@ def render_journey():
                 f'padding-left:0.8rem; margin-bottom:0.6rem;">'
                 f'<b>Vonis: {s["vonis"]}</b></div>',
                 unsafe_allow_html=True)
-            st.markdown("\n".join(_gerbang_lines(s, gates)))
+            if s.get("sah") is not None:
+                st.markdown("\n".join(_gerbang_lines(s, gates)))
+            else:
+                st.markdown(
+                    "- ℹ️ **Tahap persiapan** — tidak dinilai dengan "
+                    "gerbang klaim; gerbang hanya menilai paket model "
+                    "utuh (hasil rakitannya dinilai di Tahap 2C).")
+            if s.get("perlakuan"):
+                st.markdown(f"**Perlakuan tahap ini.** {s['perlakuan']}")
+            if s.get("model"):
+                st.markdown(f"**Model.** {s['model']}")
+            if s.get("data"):
+                st.markdown(f"**Data & sumber.** {s['data']}")
             st.markdown(f"**Hipotesis.** {s['hipotesis']}")
             st.markdown(f"**Metode.** {s['metode']}")
             st.markdown(f"**Hasil.** {s['hasil']}")

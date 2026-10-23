@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.3.4.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.4.0.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,14 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v5.4.0 (Perjalanan Riset lengkap): Tahap 2A (korpus) & 2B
+(fine-tune) kini berdiri sendiri di alur dan detail — sebelumnya
+melebur di dalam entri 2C — dan SETIAP tahap kini memuat rincian
+Perlakuan / Model / Data & sumber (dataset + asal-usulnya). 2A/2B
+adalah tahap persiapan tanpa skor gerbang (kunci `persiapan` di
+results.json, aditif: journey.py lama mengabaikannya dengan aman).
+Tab ini termuat pada reboot berikutnya.
 
 Baru di v5.3.4 (info tambahan hasil audit): glosarium kartu benchmark
 (PR-AUC / Recall@FPR1% / ECE) di caption arena; caption expander skor
@@ -128,7 +136,7 @@ from triage_core import TriageEngine, ZONES
 from rules import apply_rules_and_calm, _SIGNAL_NAMES
 from journey import render_journey
 
-APP_VERSION = "v5.3.4"
+APP_VERSION = "v5.4.0"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV

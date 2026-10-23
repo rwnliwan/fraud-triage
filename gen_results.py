@@ -20,6 +20,15 @@ Narasi per tahap didistilasi setia dari tahap2c_results.md,
 tahap2d_results.md, dan README_TAHAP2D.md §1/§7. Vonis ditulis apa
 adanya — termasuk dua paket yang DITOLAK.
 
+v5.4.0: Tahap 2A (korpus) & 2B (fine-tune) kini berdiri sendiri di
+kunci `persiapan` — keduanya tahap persiapan TANPA skor gerbang
+(gerbang hanya menilai paket model utuh), didistilasi dari
+README_TAHAP2.md + corpus_stats.json + training_log.json. Semua tahap
+juga membawa `perlakuan` / `model` / `data` (apa yang diubah, paket
+modelnya, dataset + sumbernya). Desain aditif disengaja: kode
+journey.py lama mengabaikan kunci baru sehingga app live tidak rusak
+sebelum reboot memuat journey.py baru.
+
 Jalankan:  python gen_results.py   (menulis results.json di folder ini)
 """
 
@@ -94,6 +103,19 @@ TAHAP_0 = {
         "latih Inggris, sehingga pesan yang 'terdengar resmi' terbaca "
         "sebagai mencurigakan. Perbaikan harus menyentuh data dan "
         "representasi bahasa Indonesia — bukan sekadar menggeser ambang."),
+    "perlakuan": (
+        "Tidak ada perlakuan — model live dinilai apa adanya sebagai "
+        "titik berangkat (baseline)."),
+    "model": (
+        "Ensemble Top-3 Terkalibrasi CHOSEN: DistilBERT multilingual "
+        "fine-tune UCI + TF-IDF/Fitur Angka/Logistic Regression + "
+        "TF-IDF/Logistic Regression; ambang live t_close 0,010 · "
+        "t_esc 0,135."),
+    "data": (
+        "Data latih model: UCI SMS Spam Collection (SMS Inggris "
+        "±2011). Data nilai: set hakim Indonesia 300 pesan (150 SAH / "
+        "150 SMISHING, 20 kategori) yang tidak pernah dipakai melatih "
+        "model mana pun."),
 }
 
 NARASI = {
@@ -126,9 +148,20 @@ NARASI = {
             "rendah: 36,0% masih jauh dari gerbang SAH 85%. Ini tambal "
             "terukur, bukan obat — perbaikan sejatinya adalah fine-tune "
             "dwibahasa (Tahap 2)."),
+        "perlakuan": (
+            "Model TIDAK diubah sama sekali. Yang berubah hanya "
+            "lapisan aturan: ditambah sinyal penenang satu arah "
+            "(menurunkan band tepat satu tingkat, bersyarat ketat, "
+            "gugur bila ada sinyal kuat)."),
+        "model": (
+            "Sama persis dengan Tahap 0 (ensemble CHOSEN) + rules.py "
+            "dengan sinyal penenang (app v4)."),
+        "data": (
+            "Tidak ada data latih baru. Paket dinilai ulang pada set "
+            "hakim 300 yang sama dengan Tahap 0."),
     },
     "2c": {
-        "nama": "Fine-tune dwibahasa (Tahap 2A–2C)",
+        "nama": "Perakitan & penilaian paket dwibahasa",
         "tanggal": "2026-10-22",
         "vonis": "DITOLAK — gagal tipis: SAH 84,0% (kurang 2 pesan), "
                  "SMISHING 94,7% (kurang 1 pesan), AUTO-CLOSE 3",
@@ -160,6 +193,19 @@ NARASI = {
             "telco_tagihan_pulsa 66,7%, apk_malware 73,3%. Perbaikan "
             "berikutnya harus memperbaiki data + kriteria derivasi — "
             "bukan melonggarkan gerbang."),
+        "perlakuan": (
+            "Merakit hasil 2A + 2B menjadi paket kandidat utuh: BERT "
+            "fine-tune + anggota sklearn dilatih ulang + ambang "
+            "diturunkan ulang dari split kalibrasi, lalu paket dinilai "
+            "gerbang full-stack."),
+        "model": (
+            "Ensemble dwibahasa BARU (bukan model live): DistilBERT "
+            "fine-tune 2B (temperatur kalibrasi 2,0129) + 2 anggota "
+            "sklearn yang dilatih ulang pada data dwibahasa."),
+        "data": (
+            "Data latih sama dengan 2B (UCI + korpus 2A; FIT 5.831 / "
+            "KALIBRASI 816). Ambang dari split kalibrasi: t_close "
+            "0,2930 · t_esc 0,3516. Data nilai: set hakim 300 yang sama."),
     },
     "2d": {
         "nama": "Loop perbaikan 2D",
@@ -202,8 +248,119 @@ NARASI = {
             "keluarga templat penahan. Harga lainnya: pesan SAH yang "
             "berhenti di REVIEW naik 23 → 47, beban analis naik. Tidak "
             "ada satu pun angka yang digeser sesudah melihat set hakim."),
+        "perlakuan": (
+            "Satu loop perbaikan terukur dari 2C: data baru tepat pada "
+            "kategori terlemah + kriteria derivasi t_close diganti "
+            "toleransi-nol + aturan pemilihan epoch ditetapkan di muka. "
+            "Arsitektur model tidak berubah."),
+        "model": (
+            "Arsitektur sama dengan paket 2C, dilatih ulang dari awal; "
+            "checkpoint epoch-1 yang menang (PR-AUC kalibrasi mentah "
+            "0,9673 vs epoch-2 0,9288). Ambang hasil derivasi baru: "
+            "t_close 0,1422 · t_esc 0,4092."),
+        "data": (
+            "Korpus 2A ditambah 980 baris baru dari 7 keluarga templat "
+            "(FIT +600; 380 baris dari 3 keluarga ditahan utuh untuk "
+            "kalibrasi). Split baru FIT 6.431 / KALIBRASI 1.196. "
+            "Gerbang kemiripan vs set hakim: Jaccard maksimum yang "
+            "lolos 0,50. Data nilai: set hakim 300 yang sama."),
     },
 }
+
+# ---------------------------------------------------------------------------
+# Tahap 2A & 2B — tahap PERSIAPAN (data & fine-tune). Keduanya tidak
+# dinilai gerbang klaim: gerbang hanya menilai paket model utuh (2C).
+# Sumber: README_TAHAP2.md, corpus_stats.json, training_log.json.
+# ---------------------------------------------------------------------------
+TAHAP_2A = {
+    "id": "2a",
+    "nama": "Korpus latih Indonesia",
+    "tanggal": "2026-10-22",
+    "vonis": "SELESAI — korpus 2.512 baris lolos gerbang anti-bocor; "
+             "tahap data, bukan paket model",
+    "warna_vonis": "netral",
+    "hipotesis": (
+        "Register resmi Indonesia bisa diajarkan lewat korpus campuran: "
+        "sisa dataset publik Indonesia + keluarga templat baru yang "
+        "ditulis menargetkan wilayah lemah Tahap 1 — asalkan korpus "
+        "terbukti terpisah dari set hakim."),
+    "metode": (
+        "Korpus dibangun dari dua sumber lalu disaring gerbang "
+        "anti-bocor 3 lapis terhadap set hakim: teks persis sama "
+        "dibuang, kerangka sama (digit & domain ditopeng) dibuang, "
+        "Jaccard token ≥ 0,80 dibuang. Semua nomor & domain disamarkan "
+        "ke fiktif. Label publik dipetakan: penipuan → 1, promo → 1, "
+        "normal → 0."),
+    "hasil": (
+        "2.512 baris lolos semua gerbang: 1.096 baris publik (dari "
+        "1.143; dibuang 15 persis + 11 kerangka + 20 Jaccard + 1 "
+        "duplikat) + 1.416 baris templat. Komposisi hampir seimbang: "
+        "1.255 positif / 1.257 negatif, 0 duplikat, QA baca acak "
+        "30/30 wajar. Jaccard maksimum yang lolos vs set hakim 0,793 "
+        "(baris publik) dan 0,55 (baris templat)."),
+    "pelajaran": (
+        "Dataset SMS Indonesia yang publik & tersisa memang sangat "
+        "kecil dan tua — sebagian besar korpus harus dibuat sendiri. "
+        "Korpus templat membawa risiko artefak yang harus diingat "
+        "saat membaca hasil 2C/2D: 1.258 pasangan sekeluarga hanya "
+        "berbeda digit/domain tertopeng (Jaccard tertopeng 1,0)."),
+    "perlakuan": (
+        "Membangun DATA latih Indonesia dari nol — belum ada model "
+        "baru di tahap ini. Perlakuan murni di sisi data: kumpulkan, "
+        "pulihkan label, buat keluarga templat baru, saring, samarkan."),
+    "model": (
+        "— (tahap data; model belum dilatih)"),
+    "data": (
+        "2.512 baris = 1.096 publik: Kaggle gevabriel/indonesian-sms-"
+        "spam (CC0; keturunan korpus GitHub agtbaskara, SMS Indonesia "
+        "±2012–2016), label 3-kelasnya dipulihkan lewat Kaggle "
+        "crystalbaby (Apache 2.0) + 1.416 baris generate: 25 keluarga "
+        "templat (12 sah / 13 smishing) dengan institusi & domain "
+        "fiktif yang berbeda dari set evaluasi."),
+}
+
+TAHAP_2B = {
+    "id": "2b",
+    "nama": "Fine-tune DistilBERT dwibahasa",
+    "tanggal": "2026-10-22",
+    "vonis": "SELESAI — fine-tune tereksekusi; overfit epoch 2 "
+             "terdeteksi di kalibrasi; belum berupa paket",
+    "warna_vonis": "kuning",
+    "hipotesis": (
+        "DistilBERT multilingual yang di-fine-tune pada campuran UCI "
+        "+ korpus 2A akan belajar register Indonesia tanpa melupakan "
+        "Inggris."),
+    "metode": (
+        "Fine-tune di Colab GPU T4 (VM proyek punya riwayat OOM): "
+        "base distilbert-base-multilingual-cased, max_len 64, batch "
+        "16, 2 epoch, AdamW lr 5e-5, seed 42, loop manual. Sesudah "
+        "latih, temperatur kalibrasi BERT diturunkan dari split "
+        "kalibrasi."),
+    "hasil": (
+        "Fine-tune selesai dalam ±90 detik/epoch. PR-AUC kalibrasi "
+        "mentah: epoch 1 = 0,9746, epoch 2 = 0,9115 — epoch 2 OVERFIT "
+        "(loss turun 0,109 → 0,041 tetapi PR-AUC kalibrasi jatuh). "
+        "Temperatur kalibrasi BERT: 2,0129."),
+    "pelajaran": (
+        "Sinyal overfit sudah muncul di epoch 2 — pelajaran ini yang "
+        "kemudian membuat 2D menetapkan aturan pemilihan epoch di "
+        "muka. Dan fine-tune mentah belum bisa dinilai gerbang: ia "
+        "harus dirakit menjadi ensemble + dikalibrasi dulu (Tahap "
+        "2C)."),
+    "perlakuan": (
+        "Melatih MODEL bahasa dwibahasa di GPU — perlakuan murni di "
+        "sisi model. Ambang, ensemble, dan penilaian gerbang belum "
+        "terjadi di tahap ini."),
+    "model": (
+        "distilbert/distilbert-base-multilingual-cased, fine-tune "
+        "klasifikasi biner (sah vs spam/smishing), 2 epoch."),
+    "data": (
+        "FIT 5.831 baris (UCI 3.722 + gevabriel 931 + templat 1.178) "
+        "/ KALIBRASI 816 baris (UCI 413 + gevabriel 165 + templat "
+        "238) — korpus 2A digabung data latih UCI."),
+}
+
+PERSIAPAN = [TAHAP_2A, TAHAP_2B]
 
 SUMBER = {
     "1": "eval_smoke_current.json",
@@ -247,7 +404,8 @@ def main():
     heatmap = (_per_kategori(evs["2c"], "Tahap 2C")
                + _per_kategori(evs["2d"], "Tahap 2D"))
 
-    data = {"gates": GERBANG, "stages": stages, "kategori_heatmap": heatmap}
+    data = {"gates": GERBANG, "stages": stages, "persiapan": PERSIAPAN,
+            "kategori_heatmap": heatmap}
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
 
