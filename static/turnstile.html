@@ -4,9 +4,13 @@
 <body>
 <div id="ts"></div>
 <script>
-  // Komponen Turnstile Siskamling Digital — protokol komponen Streamlit
-  // ditulis manual (tanpa pustaka tambahan): componentReady ->
-  // streamlit:render (args.sitekey) -> setComponentValue(token).
+  // Komponen Turnstile Siskamling Digital — protokol komponen Streamlit v1.
+  // PERBAIKAN 2026-10-23: setiap pesan balik WAJIB membawa
+  // isStreamlitMessage: true — router pesan frontend Streamlit (>=1.51,
+  // terverifikasi di sumber 1.66.1: onMessageEvent membuang pesan apa pun
+  // yang tidak punya properti itu) membuang componentReady polos secara
+  // diam-diam, sehingga app mengira komponen tidak pernah siap.
+  // Pustaka resmi streamlit-component-lib selalu menambahkan properti ini.
   var sitekey = null;
   var widgetId = null;
   var renderReceived = false;
@@ -14,7 +18,7 @@
   var readyTimer = null;
 
   function send(type, data) {
-    var msg = {type: type};
+    var msg = {isStreamlitMessage: true, type: type};
     if (data) { for (var k in data) { msg[k] = data[k]; } }
     window.parent.postMessage(msg, "*");
   }
@@ -60,8 +64,7 @@
   // componentReady dikirim BERULANG sampai render pertama diterima:
   // satu pengiriman saat parse bisa kalah balapan dengan navigasi
   // iframe (dokumen awal about:blank) sehingga induk tak pernah
-  // mengirim render. Pola kirim-ulang ini yang membuat jabat tangan
-  // komponen andal.
+  // mengirim render.
   sendReady();
   readyTimer = setInterval(function () {
     readyTries += 1;
