@@ -4,6 +4,7 @@
 · Model: [Hugging Face `rwnliwan/fraud-triage-smishing`](https://huggingface.co/rwnliwan/fraud-triage-smishing)
 · Notebook proyek: `fraud-triage-laya-vs-ml-dl.ipynb` (arsip riset lengkap Tahap 0–2D)
 · 📄 Dokumen proyek (edisi v2): [Laporan Lengkap Proyek (PDF)](docs/laporan-lengkap-proyek.pdf) · [Presentasi LinkedIn (PDF)](docs/presentasi-linkedin.pdf)
+· 👤 Penulis: [Septian Panjaya — LinkedIn](https://www.linkedin.com/in/septian-panjaya)
 
 ## 🏘️ Siskamling Digital — layanan publik (live)
 
