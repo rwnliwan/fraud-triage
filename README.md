@@ -24,7 +24,10 @@ tab pertama yang menyambut pengunjung:
   Panel analitik + progres korpus menuju retrain di tab yang sama.
 - **Perlindungan layanan** — batas laju per pengirim/harian, pemutus
   antrean, kill switch intake, deteksi duplikat, monitor lonjakan,
-  dan Cloudflare Turnstile terpasang dorman (aktif saat dibutuhkan).
+  dan Cloudflare Turnstile **aktif permanen** melindungi formulir
+  laporan dari bot (dinyalakan 23 Okt 2026 setelah terverifikasi di
+  perangkat asli; halaman komponennya dilayani Cloudflare Worker
+  `siskamling-ts.rwnliwan.workers.dev`).
 
 **Baru di v6.0** (gelombang riset kompetitor — menutup celah yang
 ditunjukkan pemetaan lanskap di bawah):
@@ -225,13 +228,19 @@ untuk pesan penipuan — dengan mesin Fraud Triage yang sama:
   jeda 20 detik antar-kirim per sesi, dan kolom `text_hash` (sidik
   teks ternormalisasi) untuk deteksi duplikat. Monitor lonjakan
   (30 menit) dan ekspor cadangan mingguan berjalan di sisi pengelola.
-  **UI/UX Opsi A + Turnstile dorman** (v5.9.x): tab Lapor & Cek menjadi
+  **UI/UX Opsi A + Turnstile** (v5.9.x): tab Lapor & Cek menjadi
   halaman mendarat, hero warga + vonis bahasa awam (detail teknis
   dilipat ke expander), saringan kategori di galeri; Cloudflare
-  Turnstile terpasang dorman lewat komponen `turnstile_component/` —
-  aktif hanya bila kedua kunci terpasang di secrets DAN
-  `app_config.turnstile_on='1'` (verifikasi widget dilakukan
-  terkendali di app live sebelum flag dinyalakan untuk warga).
+  Turnstile pada rilis ini dipasang dorman — aktif hanya bila kedua
+  kunci terpasang di secrets DAN `app_config.turnstile_on='1'`.
+  **Status kini: Turnstile AKTIF permanen sejak 23 Okt 2026** — flag
+  dinyalakan setelah widget terverifikasi terkendali di perangkat
+  asli (laporan uji lolos verifikasi server, lalu dibersihkan).
+  Halaman komponennya tidak lagi dilayani dari path lokal
+  `turnstile_component/` (salinan sumbernya tetap di repo sebagai
+  acuan), melainkan dari Cloudflare Worker
+  `siskamling-ts.rwnliwan.workers.dev` — URL bawaan di `siskamling.py`,
+  dapat ditimpa via env `SISKAMLING_TS_URL`/`SISKAMLING_TS_PATH`.
 
 Konfigurasi deploy (Streamlit Cloud → Settings → Secrets — nilai
 **tidak pernah** masuk repo/git): `TURSO_DATABASE_URL`,
