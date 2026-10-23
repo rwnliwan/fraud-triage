@@ -155,6 +155,18 @@ untuk pesan penipuan — dengan mesin Fraud Triage yang sama:
   acuan), melainkan dari Cloudflare Worker
   `siskamling-ts.rwnliwan.workers.dev` — URL bawaan di `siskamling.py`,
   dapat ditimpa via env `SISKAMLING_TS_URL`/`SISKAMLING_TS_PATH`.
+  **v6.1.x (Okt 2026) — tindak lanjut kritik eksternal atas Laporan
+  Edisi v3.2:** Laporan naik ke Edisi v3.3 (CI Wilson 95% + vonis
+  tiga status — *lolos jelas / tidak meyakinkan / gagal jelas* —
+  berlaku juga di tab Perjalanan Riset app); label warga dari skor
+  saja dilunakkan menjadi "POLANYA SANGAT MIRIP PENIPUAN" (label
+  tegas hanya bila aturan keras terpicu); kebijakan privasi &
+  retensi (UU PDP) tertulis di tab Lapor & Cek — gambar OCR diproses
+  di memori dan tidak disimpan, hak hapus saat ini berupa penandaan
+  status; protokol hakim & korpus ditulis sebagai dokumen tersendiri
+  di arsip proyek. Loading app dioptimasi (engine malas, query
+  digabung, cache): terukur lokal app siap 41,6 → 7,2 detik dan
+  konten Lapor & Cek 45,9 → 11,3 detik.
 
 ## Lapisan aturan (rules layer)
 
@@ -253,7 +265,7 @@ yang tidak pernah jadi data latih:
 (menala ke arahnya = overfitting), dan riset ketersediaan dataset
 (Oktober 2026) membuktikan bottleneck-nya struktural — **hanya ada satu
 korpus SMS Indonesia asli yang publik (1.143 baris, 3 kelas, era
-2013–2015) dan nol dataset smishing Indonesia publik**, sementara modus
+±2012–2016) dan nol dataset smishing Indonesia publik**, sementara modus
 modern (APK via WhatsApp, pinjol, judol) tidak punya contoh berlabel
 sama sekali. Hasil negatif ini disajikan apa adanya karena rigor
 evaluasinya adalah nilai proyek ini.

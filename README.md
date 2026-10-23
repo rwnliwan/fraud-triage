@@ -19,14 +19,18 @@ Tab pertama yang menyambut pengunjung app:
 
 - **📮 Lapor & Cek** — tempel pesan mencurigakan (atau unggah
   tangkapan layar, teks dibaca OCR lalu diedit warga dulu) → vonis
-  bahasa awam (🔴 hampir pasti penipuan / 🟡 mencurigakan /
-  🟢 kemungkinan aman) + **kartu langkah darurat sesuai keadaan**
+  bahasa awam (🔴 polanya sangat mirip penipuan / 🟡 mencurigakan /
+  🟢 kemungkinan aman — label tegas hanya bila aturan keras
+  terpicu) + **kartu langkah darurat sesuai keadaan**
   (belum klik → uang sudah terkirim; tautan resmi
   [IASC OJK](https://iasc.ojk.go.id), [cekrekening.id](https://cekrekening.id),
   [aduannomor.id](https://aduannomor.id)) + lapor agar warga lain
   terlindungi. Setiap laporan punya **nomor lacak** untuk memeriksa
   status pemeriksaannya. Teks dibersihkan otomatis dari data pribadi
   sebelum disimpan; pengirim hanya disimpan sebagai hash satu arah.
+  Kebijakan privasi & retensi mengacu UU PDP dan tertulis terbuka
+  di tab ini (gambar tangkapan layar hanya diproses di memori
+  untuk OCR — tidak disimpan).
 - **🖼️ Galeri Modus** — modus terverifikasi yang bisa disaring per
   kategori, untuk mengenali pola sebelum jadi korban.
 - **🔐 Verifikasi** (admin, gerbang kata sandi) — label akhir selalu
@@ -39,6 +43,11 @@ Tab pertama yang menyambut pengunjung app:
   tinjauan kedua buta → subset emas). Domain dalam laporan dicek
   umurnya via RDAP sebagai info pendukung — tidak pernah menentukan
   label.
+- **Pembaruan v6.1 (Okt 2026)** — tindak lanjut kritik eksternal:
+  vonis di tab Perjalanan Riset kini tiga status berbasis CI Wilson
+  95% (*lolos jelas / tidak meyakinkan / gagal jelas*), dan loading
+  app jauh lebih cepat (engine model dibangun malas — saat analisis
+  pertama, bukan saat halaman dibuka).
 
 Misi datanya: membangun **korpus smishing Bahasa Indonesia berlabel
 manusia** — riset proyek ini menemukan belum ada korpus publik
