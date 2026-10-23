@@ -153,7 +153,7 @@ untuk pesan penipuan — dengan mesin Fraud Triage yang sama:
   Halaman komponennya tidak lagi dilayani dari path lokal
   `turnstile_component/` (salinan sumbernya tetap di repo sebagai
   acuan), melainkan dari Cloudflare Worker
-  `siskamling-ts.rwnliwan.workers.dev` — URL bawaan di `siskamling.py`,
+  khusus komponen Turnstile — URL bawaannya ada di `siskamling.py`,
   dapat ditimpa via env `SISKAMLING_TS_URL`/`SISKAMLING_TS_PATH`.
   **v6.1.x (Okt 2026) — tindak lanjut kritik eksternal atas Laporan
   Edisi v3.2:** Laporan naik ke Edisi v3.3 (CI Wilson 95% + vonis

@@ -8,8 +8,6 @@ termasuk kegagalannya**.
 
 **Demo live: [fraud-triage-demo.streamlit.app](https://fraud-triage-demo.streamlit.app/)**
 · Model: [Hugging Face `rwnliwan/fraud-triage-smishing`](https://huggingface.co/rwnliwan/fraud-triage-smishing)
-· Notebook proyek: `fraud-triage-laya-vs-ml-dl.ipynb` (arsip riset lengkap Tahap 0–2D)
-· 📄 Dokumen proyek (edisi terbaru: Laporan v3.3 · Presentasi v3.5): [Laporan Lengkap Proyek (PDF)](docs/laporan-lengkap-proyek.pdf) · [Presentasi LinkedIn (PDF)](docs/presentasi-linkedin.pdf)
 · 📖 Rincian teknis & riset: [docs/RINCIAN.md](docs/RINCIAN.md) · 🚀 Panduan deploy: [docs/DEPLOY.md](docs/DEPLOY.md)
 · 👤 Penulis: [Septian Panjaya — LinkedIn](https://www.linkedin.com/in/septian-panjaya)
 
@@ -131,7 +129,7 @@ baru berhak diuji dengan syarat yang sama persis; yang dipertahankan
 bukan modelnya, melainkan standarnya. Posisi proyek di lanskap 13
 pembanding (layanan resmi, pemeriksa global, korpus kerumunan,
 model akademik): ringkasnya di
-[docs/RINCIAN.md](docs/RINCIAN.md), lengkapnya di Bagian 13 Laporan.
+[docs/RINCIAN.md](docs/RINCIAN.md).
 
 ## 💻 Menjalankan lokal
 
@@ -155,7 +153,7 @@ artefak model diunduh dari Hugging Face saat pertama jalan):
 | `triage_core.py` | Logika model murni: ensemble, kalibrasi temperatur, kebijakan dua ambang, penjelasan faktor |
 | `rules.py` | Lapisan aturan regex murni: sinyal kuat S1–S3 + sinyal penenang P1–P3 |
 | `model/ensemble_spec.json` | Spesifikasi ensemble: anggota, temperatur per anggota, ambang kebijakan |
-| `docs/` | Laporan & presentasi (PDF) · [RINCIAN.md](docs/RINCIAN.md) · [DEPLOY.md](docs/DEPLOY.md) · tangkapan layar & demo |
+| `docs/` | [RINCIAN.md](docs/RINCIAN.md) · [DEPLOY.md](docs/DEPLOY.md) · tangkapan layar & demo |
 
 Tabel isi folder lengkap: [docs/RINCIAN.md](docs/RINCIAN.md).
 
@@ -164,4 +162,4 @@ Tabel isi folder lengkap: [docs/RINCIAN.md](docs/RINCIAN.md).
 *Model ini artefak proyek pembelajaran terpimpin (data SMS Inggris ±2011);
 bukan sistem produksi perbankan. Vonis lengkap metode — termasuk posisi
 Laya sebagai kandidat lapisan teks, bukan model operasional — ada di
-notebook proyek.*
+[docs/RINCIAN.md](docs/RINCIAN.md).*
