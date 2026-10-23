@@ -1,0 +1,6 @@
+# Paket sistem untuk Streamlit Community Cloud (apt).
+# Siskamling v6.0: biner OCR untuk fitur baca tangkapan layar pesan
+# (pytesseract di requirements.txt adalah pembungkus Python-nya;
+# data bahasa Indonesia wajib agar OCR pesan warga terbaca benar).
+tesseract-ocr
+tesseract-ocr-ind

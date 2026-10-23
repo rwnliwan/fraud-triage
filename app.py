@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.9.1.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v6.0.0.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -15,6 +15,35 @@ Perlakuan / Model / Data & sumber (dataset + asal-usulnya). 2A/2B
 adalah tahap persiapan tanpa skor gerbang (kunci `persiapan` di
 results.json, aditif: journey.py lama mengabaikannya dengan aman).
 Tab ini termuat pada reboot berikutnya.
+
+Baru di v6.0.0 (SISKAMLING DIGITAL — gelombang riset kompetitor):
+(1) Kartu langkah darurat berbasis keadaan sesudah vonis 🔴/🟡 di tab
+Lapor & Cek (siskamling.py): warga memilih keadaannya — belum klik /
+sudah klik / sudah beri OTP-data / uang terkirim — dan menerima
+langkah yang sesuai + tautan resmi cekrekening.id, aduannomor.id,
+dan IASC OJK (iasc.ojk.go.id); keadaan terberat menaruh langkah
+tercepat (hubungi bank + IASC untuk pembekuan) paling atas.
+(2) Loop tertutup: nomor laporan dinyatakan sebagai NOMOR LACAK dan
+tab Lapor & Cek mendapat expander "🔎 Lacak laporan saya" — warga
+memasukkan nomor laporan dan melihat status pemeriksaan (menunggu /
+sudah diperiksa + label bahasa warga) tanpa teks/hash/data lain
+terekspos. (3) Intake tangkapan layar + OCR (pytesseract ind+eng;
+packages.txt memasang tesseract-ocr + tesseract-ocr-ind di Streamlit
+Cloud): teks bacaan tampil untuk diedit warga sebelum masuk alur
+cek/lapor yang sama; OCR tidak tersedia/gagal -> warga diarahkan
+tempel manual, tidak menggagalkan apa pun. (4) Pengayaan intake:
+domain dari teks ter-scrub dicek umurnya via RDAP publik (tanpa
+kunci API) dan disimpan di kolom baru reports.enrichment (migrasi
+migrate_v6.py); tampil di kartu antrean Verifikasi sebagai info
+pendukung, BUKAN penentu label; kegagalan lookup tidak pernah
+menggagalkan laporan. (5) Pertahanan anti-racun korpus: batas maks
+3 laporan per teks sama (text_hash) per hari — selebihnya tidak
+tersimpan sebagai duplikat berlebih; tabel baru label_log mencatat
+setiap aksi label (verifikasi / tinjauan kedua / kembalikan / tolak
+/ hapus); tab Verifikasi mendapat alur TINJAUAN KEDUA buta atas
+sampel acak laporan terverifikasi — hasil yang cocok masuk SUBSET
+EMAS, hitungannya tampil di panel Analitik. Semua perubahan di modul
+siskamling.py + migrasi DB aditif — termuat pada reboot berikutnya.
 
 Baru di v5.9.1 (SISKAMLING DIGITAL — ketahanan integrasi Turnstile):
 token Turnstile yang sudah lolos verifikasi dipakai ulang selama sesi
@@ -219,7 +248,7 @@ from journey import render_journey
 from siskamling import render_lapor_tab, render_gallery_tab, \
     render_admin_tab
 
-APP_VERSION = "v5.9.1"
+APP_VERSION = "v6.0.0"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV

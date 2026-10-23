@@ -18,6 +18,21 @@ Lapisan layanan publik di atas mesin Fraud Triage:
 * Galeri Modus menampilkan laporan berstatus 'verified' +
   gallery_visible=1 saja — tidak ada jalan bagi baris pending tampil.
 
+Baru di v6.0.0 (gelombang riset kompetitor): (1) kartu langkah darurat
+berbasis keadaan sesudah vonis — warga memilih keadaannya (belum klik /
+sudah klik / sudah beri OTP-data / uang terkirim) dan menerima langkah
+yang sesuai + tautan resmi cekrekening.id, aduannomor.id, IASC OJK.
+(2) Loop tertutup: nomor laporan = nomor lacak; expander "Lacak
+laporan saya" menampilkan status pemeriksaan tanpa data lain.
+(3) Intake tangkapan layar + OCR (pytesseract ind+eng; biner dari
+packages.txt di Streamlit Cloud) — teks bacaan diedit warga dulu,
+lalu masuk alur yang sama; OCR absen/gagal tidak menggagalkan apa
+pun. (4) Pengayaan intake: umur domain via RDAP publik disimpan di
+reports.enrichment (info pendukung verifikasi, bukan penentu label).
+(5) Anti-racun korpus: batas 3 laporan per teks sama per hari; tabel
+label_log (jejak audit label) + tinjauan kedua buta atas sampel acak
+terverifikasi — yang cocok menjadi "subset emas" (tampil di Analitik).
+
 Konfigurasi (Streamlit secrets ATAU env; lokal: berkas mode 600
 ~/.config/turso/siskamling-digital.env):
     TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, SISKAMLING_SENDER_SALT
@@ -30,6 +45,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -354,6 +370,240 @@ def reports_today_count(cfg: dict) -> int:
 
 
 # ---------------------------------------------------------------------------
+# v6.0 — pengayaan intake, OCR, lacak laporan, jejak label, anti-racun
+#
+# Dari riset kompetitor (ScamShield SG, SmishTank, IASC): yang membuat
+# layanan anti-penipuan terasa hidup bagi warga adalah (a) langkah
+# darurat yang sesuai KEADAAN korban, bukan vonis generik; (b) laporan
+# yang bisa DILACAK balik (loop tertutup); (c) pengayaan konteks saat
+# laporan masuk, sebelum tautan penipu mati. Ditambah pertahanan
+# korpus: korpus dari laporan publik adalah permukaan serangan
+# (peracunan data latih), jadi teks-sama dibatasi per hari dan setiap
+# keputusan label punya jejak audit + tinjauan kedua.
+# ---------------------------------------------------------------------------
+CEKREKENING_URL = "https://cekrekening.id"
+ADUANNOMOR_URL = "https://aduannomor.id"
+IASC_URL = "https://iasc.ojk.go.id"
+MAX_SAME_TEXT_PER_DAY = 3
+MAX_ENRICH_DOMAINS = 3
+
+
+def same_text_today_count(cfg: dict, th: str | None) -> int:
+    """Berapa laporan dengan sidik teks sama sudah masuk HARI INI."""
+    if not th:
+        return 0
+    return turso_execute(
+        cfg, "SELECT COUNT(*) AS n FROM reports WHERE text_hash = ? "
+             "AND created_at >= date('now')", [th])[0]["n"]
+
+
+# --- Pengayaan: umur domain via RDAP publik (tanpa kunci API) --------
+_LINK_MARK_RE = re.compile(r"\[tautan:\s*([^\]]+)\]")
+
+
+def extract_domains(clean_text: str) -> list:
+    """Domain dari penanda [tautan: host] pada teks TER-SCRUB — urutan
+    kemunculan, tanpa duplikat. Scrubber memang mempertahankan domain
+    sebagai sinyal modus, jadi pengayaan bekerja di atas teks bersih
+    yang sama dengan yang tersimpan."""
+    seen, out = set(), []
+    for m in _LINK_MARK_RE.finditer(clean_text or ""):
+        host = m.group(1).strip().lower()
+        if host and host not in seen:
+            seen.add(host)
+            out.append(host)
+    return out
+
+
+def _rdap_lookup(domain: str) -> dict | None:
+    """Satu lookup RDAP (rdap.org mengalihkan ke registri berwenang).
+
+    Kembalikan {domain, registered, age_days, registrar?} atau None
+    bila gagal — pengayaan TIDAK BOLEH menggagalkan laporan warga."""
+    url = "https://rdap.org/domain/" + urllib.parse.quote(domain)
+    req = urllib.request.Request(
+        url, headers={
+            "User-Agent": "Mozilla/5.0 (Siskamling Digital)",
+            "Accept": "application/rdap+json, application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    info = {"domain": domain}
+    for ev in data.get("events") or []:
+        if ev.get("eventAction") in ("registration", "registered"):
+            raw = (ev.get("eventDate") or "")[:10]
+            try:
+                born = datetime.strptime(raw, "%Y-%m-%d").replace(
+                    tzinfo=timezone.utc)
+                info["registered"] = raw
+                info["age_days"] = (
+                    datetime.now(timezone.utc) - born).days
+            except ValueError:
+                pass
+            break
+    for ent in data.get("entities") or []:
+        if "registrar" in (ent.get("roles") or []):
+            vcard = ent.get("vcardArray") or [None, []]
+            for item in (vcard[1] if len(vcard) > 1 else []) or []:
+                if item and item[0] == "fn" and len(item) > 3:
+                    info["registrar"] = str(item[3])[:80]
+            break
+    return info
+
+
+def build_enrichment(clean_text: str) -> str | None:
+    """Ringkasan pengayaan intake sebagai string JSON (atau None bila
+    teks tak memuat domain / semua lookup gagal total)."""
+    domains = extract_domains(clean_text)[:MAX_ENRICH_DOMAINS]
+    if not domains:
+        return None
+    items = []
+    for d in domains:
+        info = _rdap_lookup(d)
+        items.append(info if info else {"domain": d})
+    return json.dumps(
+        {"domains": items,
+         "checked_at": datetime.now(timezone.utc).strftime(
+             "%Y-%m-%d %H:%M:%S")},
+        ensure_ascii=False)
+
+
+def enrichment_summary(enrichment_json) -> str:
+    """Ringkas pengayaan untuk kartu verifikasi — selalu dibingkai
+    sebagai info pendukung, bukan penentu label."""
+    if not enrichment_json:
+        return ""
+    try:
+        data = json.loads(enrichment_json)
+    except (TypeError, ValueError):
+        return ""
+    parts = []
+    for it in data.get("domains") or []:
+        s = it.get("domain") or "?"
+        if it.get("age_days") is not None:
+            days = it["age_days"]
+            umur = (f"±{days} hari" if days < 730
+                    else f"±{max(days // 365, 1)} tahun")
+            s += f" (terdaftar {it.get('registered', '?')}, umur {umur}"
+            if it.get("registrar"):
+                s += f", registrar {it['registrar']}"
+            s += ")"
+        else:
+            s += " (umur domain tidak terbaca)"
+        parts.append(s)
+    return " · ".join(parts)
+
+
+# --- OCR tangkapan layar (pytesseract; biner dari packages.txt) -------
+def ocr_image_to_text(image_bytes: bytes) -> tuple[str, str]:
+    """Baca teks pesan dari tangkapan layar (bahasa ind+eng).
+
+    Kembalikan (teks, status): 'ok' (ada teks), 'empty' (tak terbaca
+    teks), 'unavailable' (mesin OCR/pustaka tidak ada di server ini),
+    'error' (berkas bukan gambar yang bisa dibuka). Status apa pun
+    selain 'ok' ditangani UI dengan arahan tempel manual — OCR yang
+    gagal tidak pernah menggagalkan warga."""
+    try:
+        import pytesseract
+        from PIL import Image
+    except Exception:
+        return "", "unavailable"
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        img.load()
+    except Exception:
+        return "", "error"
+    try:
+        try:
+            text = pytesseract.image_to_string(img, lang="ind+eng")
+        except Exception:
+            text = pytesseract.image_to_string(img, lang="eng")
+    except Exception:
+        return "", "unavailable"
+    text = (text or "").strip()
+    return (text, "ok") if text else ("", "empty")
+
+
+# --- Lacak laporan (loop tertutup) ------------------------------------
+TRACK_LABEL_WARGA = {"SMISHING": "penipuan", "SAH": "bukan penipuan",
+                     "SPAM_PROMO": "spam / promosi"}
+
+
+def fetch_report_status(cfg: dict, report_id: int):
+    """Status SATU laporan untuk fitur lacak warga. Yang diambil hanya
+    status, label, dan tanggal — teks pesan, hash, dan data lain TIDAK
+    pernah ikut, jadi tidak ada yang bisa bocor lewat nomor lacak."""
+    rows = turso_execute(
+        cfg,
+        "SELECT status, label, created_at, verified_at FROM reports "
+        "WHERE id = ?", [int(report_id)])
+    return rows[0] if rows else None
+
+
+# --- Jejak audit label + subset emas (label_log, migrasi v6.0) --------
+def _log_label(cfg: dict, report_id: int, aksi: str,
+               label: str | None = None,
+               actor: str = "verifikator") -> None:
+    """Catat satu aksi label ke label_log. Gagal catat TIDAK boleh
+    menggagalkan aksi verifikasinya sendiri (jejak bersifat audit,
+    bukan gerbang)."""
+    try:
+        turso_execute(
+            cfg,
+            "INSERT INTO label_log (report_id, aksi, label, actor) "
+            "VALUES (?, ?, ?, ?)",
+            [int(report_id), aksi, label, actor])
+    except Exception:
+        pass
+
+
+def gold_count(cfg: dict) -> int:
+    """Jumlah laporan terverifikasi yang LOLOS tinjauan kedua dengan
+    label yang sama — definisi 'subset emas' korpus."""
+    try:
+        return turso_execute(
+            cfg,
+            "SELECT COUNT(*) AS n FROM reports r "
+            "WHERE r.status = 'verified' AND EXISTS ("
+            "SELECT 1 FROM label_log l WHERE l.report_id = r.id "
+            "AND l.aksi = 'tinjauan_kedua' AND l.label = r.label)"
+        )[0]["n"]
+    except Exception:
+        return 0
+
+
+def fetch_second_review_sample(cfg: dict, limit: int = 3) -> list:
+    """Sampel ACAK laporan terverifikasi yang belum ditinjau kedua."""
+    try:
+        return turso_execute(
+            cfg,
+            "SELECT * FROM reports r WHERE r.status = 'verified' "
+            "AND NOT EXISTS (SELECT 1 FROM label_log l "
+            "WHERE l.report_id = r.id AND l.aksi = 'tinjauan_kedua') "
+            "ORDER BY RANDOM() LIMIT ?", [int(limit)])
+    except Exception:
+        return []
+
+
+def second_review(cfg: dict, report_id: int, label: str) -> str:
+    """Catat tinjauan kedua atas satu laporan terverifikasi.
+
+    Kembalikan 'cocok' (label sama -> masuk subset emas), 'beda'
+    (dicatat sebagai perbedaan; label asli TIDAK diubah — mengubah
+    label adalah keputusan peninjau utama), atau 'hilang' (baris
+    tidak lagi terverifikasi)."""
+    rows = turso_execute(
+        cfg, "SELECT label FROM reports WHERE id = ? "
+             "AND status = 'verified'", [int(report_id)])
+    if not rows:
+        return "hilang"
+    _log_label(cfg, report_id, "tinjauan_kedua", label)
+    return "cocok" if rows[0]["label"] == label else "beda"
+
+
+# ---------------------------------------------------------------------------
 # Operasi basis data
 # ---------------------------------------------------------------------------
 def submit_report(cfg: dict, *, channel: str, raw_text: str,
@@ -368,17 +618,24 @@ def submit_report(cfg: dict, *, channel: str, raw_text: str,
     clean_text, _findings = scrub(raw_text)
     sender_hash = hash_sender(sender_raw, cfg.get("salt")) \
         if sender_raw else None
+    # Pengayaan intake (v6.0): umur domain dari teks ter-scrub via RDAP
+    # publik. Best-effort — kegagalan lookup TIDAK menggagalkan simpan.
+    try:
+        enrichment = build_enrichment(clean_text)
+    except Exception:
+        enrichment = None
     rows = turso_execute(
         cfg,
         "INSERT INTO reports (channel, text_scrubbed, model_score, "
         "model_band, rules_fired, consent_data_use, consent_at, "
-        "sender_hash, text_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "sender_hash, text_hash, enrichment) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "RETURNING id, created_at",
         [channel, clean_text, float(score), BAND_STORE[band_final],
          json.dumps(rules_fired), 1 if consent_data_use else 0,
          datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
          if consent_data_use else None,
-         sender_hash, text_hash_of(clean_text)])
+         sender_hash, text_hash_of(clean_text), enrichment])
     report_id = rows[0]["id"]
     created_at = rows[0]["created_at"]
     if consent_data_use:
@@ -504,6 +761,146 @@ def render_citizen_verdict(analysis: dict) -> None:
                     + "; ".join(signals) + ".")
 
 
+def render_emergency_card(analysis: dict) -> None:
+    """Kartu langkah darurat berbasis KEADAAN (v6.0).
+
+    Vonis saja tidak cukup bagi warga yang SUDAH berinteraksi dengan
+    pesan penipuan — yang mereka butuhkan langkah sesuai keadaannya,
+    sekarang juga. Hanya tampil untuk vonis 🔴/🟡 (pada vonis 🟢 warga
+    bukan korban; kartu darurat hanya jadi kebisingan). Keadaan
+    terberat (uang terkirim) menaruh langkah tercepat paling atas:
+    hubungi bank + lapor IASC agar rekening penipu bisa dibekukan.
+    """
+    if analysis["final_zone"] not in ("ESKALASI", "REVIEW ANALIS"):
+        return
+    st.markdown("#### ⚠️ Sudah terlanjur melakukan sesuatu "
+                "dari pesan ini?")
+    st.caption("Jangan panik — pilih keadaanmu; langkahnya menyesuaikan. "
+               "Bertindak cepat membuat perbedaan besar.")
+    state = st.radio(
+        "Keadaan saya saat ini:",
+        ["Belum — saya belum mengklik apa pun",
+         "Sudah klik tautan, tapi belum memasukkan data apa pun",
+         "Sudah memasukkan kode OTP / kata sandi / data pribadi",
+         "Uang sudah terkirim / saldo sudah berkurang"],
+        key="sk_em_state", index=None)
+    if state is None:
+        return
+    if state.startswith("Belum"):
+        st.success(
+            "✅ **Kamu masih aman.** Pesannya belum sempat menyentuhmu. "
+            "Lakukan ini:\n"
+            "- **Jangan klik** tautan di pesan itu dan jangan membalas.\n"
+            "- **Blokir + hapus** pesan dan pengirimnya.\n"
+            f"- Laporkan nomor pengirimnya ke [aduannomor.id]"
+            f"({ADUANNOMOR_URL}) agar nomor itu diperiksa petugas dan "
+            "bisa diblokir untuk semua orang.")
+    elif state.startswith("Sudah klik"):
+        st.warning(
+            "🟡 **Tutup halamannya sekarang**, lalu:\n"
+            "- Bila ada berkas/aplikasi (APK) yang terunduh, **jangan "
+            "dibuka — hapus** dari ponselmu.\n"
+            "- Bila kamu sempat masuk (login) di halaman itu, **ganti "
+            "kata sandi akun tersebut lewat aplikasi resminya** — "
+            "bukan lewat tautan tadi.\n"
+            "- Pantau aktivitas akun & mutasi rekeningmu beberapa "
+            "hari ke depan; ada yang janggal, segera hubungi bank.")
+    elif state.startswith("Sudah memasukkan"):
+        st.error(
+            "🔴 **Anggap datamu sudah di tangan penipu — bertindak "
+            "sekarang:**\n"
+            "1. **Hubungi bank / e-wallet lewat nomor resmi** di "
+            "kartumu: minta blokir akses dan ganti kata sandi & PIN.\n"
+            "2. Ganti juga kata sandi akun lain yang memakai kata "
+            "sandi yang sama.\n"
+            f"3. Bila ada rekening tujuan penipu, laporkan ke "
+            f"[IASC OJK]({IASC_URL}) dan cek rekeningnya di "
+            f"[cekrekening.id]({CEKREKENING_URL}).\n"
+            f"4. Laporkan nomor pengirimnya di [aduannomor.id]"
+            f"({ADUANNOMOR_URL}).\n"
+            "Ingat: kode OTP berikutnya yang masuk **jangan pernah "
+            "diberikan ke siapa pun**.")
+    else:
+        st.error(
+            "🔴 **Bertindak CEPAT — peluang dana kembali paling besar "
+            "di jam-jam pertama:**\n"
+            "1. **Telepon bankmu SEKARANG** (nomor resmi di kartu): "
+            "minta dana ditahan/diblokir dan catat nomor laporan dari "
+            "bank.\n"
+            f"2. **Lapor ke [IASC OJK]({IASC_URL})** — Indonesia "
+            "Anti-Scam Centre bisa mengupayakan **pembekuan rekening "
+            "penipu**.\n"
+            f"3. Cek & laporkan rekening tujuan di "
+            f"[cekrekening.id]({CEKREKENING_URL}) agar warga lain "
+            "terlindungi.\n"
+            f"4. Laporkan nomor pengirimnya di [aduannomor.id]"
+            f"({ADUANNOMOR_URL}).\n"
+            "5. **Simpan semua bukti**: tangkapan layar pesan, nomor "
+            "pengirim, rekening tujuan, dan jam kejadian — dibutuhkan "
+            "untuk laporan ke bank, IASC, dan polisi.")
+
+
+def _render_track_expander(cfg: dict, db_ready: bool) -> None:
+    """Loop tertutup (v6.0): warga melacak status laporannya sendiri
+    hanya dengan nomor laporan. Yang tampil status + label bahasa
+    warga + tanggal — isi laporan dan data lain tidak ditampilkan."""
+    with st.expander("🔎 Lacak laporan saya"):
+        st.caption(
+            "Masukkan **nomor laporan** yang kamu terima saat "
+            "mengirim (contoh: 12). Yang tampil hanya status "
+            "pemeriksaannya — isi laporanmu dan data lain tidak "
+            "ditampilkan di sini.")
+        if not db_ready:
+            st.info("Pelacakan belum aktif pada deployment ini "
+                    "(basis data belum terhubung).")
+            return
+        num = st.number_input(
+            "Nomor laporan", min_value=1, step=1, value=None,
+            key="sk_track_num", placeholder="contoh: 12")
+        if st.button("Cek status laporan", key="btn_track"):
+            if not num:
+                st.warning("Isi dulu nomor laporannya.")
+            else:
+                try:
+                    row = fetch_report_status(cfg, int(num))
+                except Exception as exc:
+                    st.error(f"Status belum bisa dimuat: {exc}")
+                    row = None
+                st.session_state["sk_track_row"] = row
+                st.session_state["sk_track_for"] = int(num)
+        row = st.session_state.get("sk_track_row")
+        if row is None and st.session_state.get("sk_track_for"):
+            st.warning(
+                "Nomor laporan tidak ditemukan. Periksa lagi "
+                "nomornya — atau laporan mungkin sudah dihapus atas "
+                "permintaan pelapor (hak hapus).")
+        elif row is not None:
+            if row["status"] == "deleted":
+                st.warning(
+                    "Nomor laporan tidak ditemukan. Periksa lagi "
+                    "nomornya — atau laporan mungkin sudah dihapus "
+                    "atas permintaan pelapor (hak hapus).")
+            elif row["status"] == "pending":
+                st.info(
+                    "⏳ **Masih menunggu pemeriksaan tim** — diterima "
+                    f"{fmt_wita(row['created_at'])}. Label hanya "
+                    "ditentukan manusia, jadi mohon ditunggu; cek "
+                    "lagi nanti dengan nomor yang sama.")
+            elif row["status"] == "verified":
+                label_w = TRACK_LABEL_WARGA.get(
+                    row["label"], row["label"] or "-")
+                st.success(
+                    "✅ **Sudah diperiksa** "
+                    f"({fmt_wita(row['verified_at'])}) — hasil "
+                    f"pemeriksaan manusia: **{label_w}**.")
+            elif row["status"] == "rejected":
+                st.info(
+                    "Laporan ini **ditutup** oleh tim — tidak lolos "
+                    "pemeriksaan (misalnya bukan pesan yang bisa "
+                    "diverifikasi, atau duplikat). Terima kasih "
+                    "sudah melapor.")
+
+
 def render_lapor_tab(engine, analyze_one, card_html) -> None:
     st.markdown("### 📮 Lapor & Cek Pesan Mencurigakan")
     st.markdown(
@@ -554,6 +951,46 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
         key="sk_sender",
         placeholder="cth. 0812xxxxxxx — hanya disimpan sebagai kode "
                     "hash satu arah, tidak pernah dalam bentuk asli")
+    with st.expander("📷 Punya tangkapan layar pesannya? "
+                     "Baca teksnya dari gambar"):
+        st.caption(
+            "Unggah tangkapan layar (screenshot) pesan — teksnya "
+            "dibaca otomatis (OCR), lalu bisa Anda periksa & betulkan "
+            "sebelum dipakai. Gambar TIDAK disimpan; yang diproses "
+            "hanya teks hasil bacaannya.")
+        up = st.file_uploader(
+            "Unggah gambar tangkapan layar (PNG/JPG)",
+            type=["png", "jpg", "jpeg"], key="sk_ocr_file")
+        if up is not None and st.button(
+                "🔎 Baca teks dari gambar", key="btn_ocr_run"):
+            with st.spinner("Membaca teks pada gambar…"):
+                ocr_text, ocr_status = ocr_image_to_text(up.getvalue())
+            if ocr_status == "ok":
+                st.session_state["sk_ocr_text"] = ocr_text
+            elif ocr_status == "unavailable":
+                st.warning(
+                    "Fitur baca gambar belum aktif di server ini — "
+                    "tidak apa-apa: salin teks pesannya secara manual "
+                    "ke kolom **Isi pesan** di bawah.")
+            elif ocr_status == "empty":
+                st.warning(
+                    "Tidak terbaca teks pada gambar itu. Coba "
+                    "tangkapan layar yang lebih jelas/terang, atau "
+                    "tempel teksnya manual di kolom **Isi pesan**.")
+            else:
+                st.warning(
+                    "Gambar tidak bisa dibuka. Coba berkas PNG/JPG "
+                    "lain, atau tempel teksnya manual di bawah.")
+        if st.session_state.get("sk_ocr_text"):
+            ocr_edited = st.text_area(
+                "Teks hasil bacaan gambar — periksa & betulkan dulu",
+                value=st.session_state["sk_ocr_text"],
+                key="sk_ocr_edit", height=110, max_chars=2000)
+            if st.button("⬇️ Pakai teks ini sebagai isi pesan",
+                         key="btn_ocr_use"):
+                st.session_state["sk_text"] = ocr_edited
+                st.session_state.pop("sk_ocr_text", None)
+                st.rerun()
     text = st.text_area(
         "Isi pesan", key="sk_text", height=130, max_chars=2000,
         placeholder="Tempel isi SMS / pesan persis seperti yang Anda "
@@ -613,6 +1050,22 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
                                          "tercapai")
                 except Exception:
                     can_store = True  # gagal cek batas != blokir warga
+                if can_store:
+                    # Anti-racun korpus (v6.0): teks yang sama persis
+                    # dibatasi per hari — banjir salinan adalah pola
+                    # peracunan data latih, bukan antusiasme warga.
+                    try:
+                        clean_preview, _f = scrub(raw)
+                        if same_text_today_count(
+                                cfg, text_hash_of(clean_preview)) \
+                                >= MAX_SAME_TEXT_PER_DAY:
+                            can_store = False
+                            block_reason = (
+                                "pesan yang sama persis sudah "
+                                "dilaporkan 3 kali atau lebih hari "
+                                "ini — kami anggap duplikat berlebih")
+                    except Exception:
+                        pass  # gagal cek != blokir warga
             with st.spinner("Menilai pesan…"):
                 analysis = analyze_one(engine, raw)
             st.session_state["sk_last"] = analysis
@@ -652,7 +1105,10 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
             f"✅ **Laporan terkirim & tercatat.** Nomor laporan Anda: "
             f"**#{receipt['id']}** · diterima "
             f"**{fmt_wita(receipt['created_at'])}** · status awal: "
-            f"menunggu verifikasi tim."
+            f"menunggu verifikasi tim. **Simpan nomor ini sebagai "
+            f"nomor lacak** — status pemeriksaannya bisa Anda cek "
+            f"kapan saja di bagian **🔎 Lacak laporan saya** di "
+            f"bawah."
             + (" Persetujuan penggunaan data: **ya** (galeri anonim + "
                "data latih)." if receipt["consent"]
                else " Persetujuan penggunaan data: **tidak** (hanya "
@@ -668,6 +1124,8 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
             "Hasil cek adalah triase awal, bukan vonis. Jangan pernah "
             "membagikan kode OTP, PIN, atau kata sandi kepada siapa "
             "pun, apa pun hasil ceknya.")
+        render_emergency_card(analysis)
+    _render_track_expander(cfg, db_ready)
 
 
 # ---------------------------------------------------------------------------
@@ -860,6 +1318,7 @@ def verify_report(cfg: dict, report_id: int, label: str, category: str,
         "category_modus = ?, gallery_visible = ?, "
         "verified_at = datetime('now') WHERE id = ? AND status = 'pending'",
         [label, category, 1 if gallery_visible else 0, int(report_id)])
+    _log_label(cfg, report_id, "verifikasi", label)
 
 
 def reject_report(cfg: dict, report_id: int) -> None:
@@ -868,6 +1327,7 @@ def reject_report(cfg: dict, report_id: int) -> None:
         "UPDATE reports SET status = 'rejected', "
         "verified_at = datetime('now') WHERE id = ? AND status = 'pending'",
         [int(report_id)])
+    _log_label(cfg, report_id, "tolak")
 
 
 def delete_report(cfg: dict, report_id: int) -> None:
@@ -877,6 +1337,7 @@ def delete_report(cfg: dict, report_id: int) -> None:
         "UPDATE reports SET status = 'deleted', gallery_visible = 0 "
         "WHERE id = ?",
         [int(report_id)])
+    _log_label(cfg, report_id, "hapus")
 
 
 def unverify_report(cfg: dict, report_id: int) -> None:
@@ -886,6 +1347,7 @@ def unverify_report(cfg: dict, report_id: int) -> None:
         "verified_at = NULL, gallery_visible = 0 "
         "WHERE id = ? AND status = 'verified'",
         [int(report_id)])
+    _log_label(cfg, report_id, "kembalikan")
 
 
 def set_gallery_visible(cfg: dict, report_id: int, visible: bool) -> None:
@@ -943,6 +1405,7 @@ def analytics_snapshot(cfg: dict) -> dict:
         ((today - timedelta(days=i)).isoformat(),
          daily.get((today - timedelta(days=i)).isoformat(), 0))
         for i in range(13, -1, -1)]
+    snap["gold"] = gold_count(cfg)
     snap["unique_senders"] = turso_execute(
         cfg, "SELECT COUNT(DISTINCT sender_hash) AS n FROM reports "
              "WHERE sender_hash IS NOT NULL")[0]["n"]
@@ -986,6 +1449,9 @@ def _render_analytics(cfg: dict) -> None:
                      + ", ".join(f"{k} {v}" for k, v in
                                  sorted(s["corpus_by_label"].items()))
                      + ")")
+    st.caption(f"🥇 Subset emas: **{s.get('gold', 0)}** laporan — "
+               "terverifikasi DAN lolos tinjauan kedua dengan label "
+               "yang sama (bahan korpus paling tepercaya).")
     c1, c2 = st.columns(2)
     with c1:
         st.caption("Laporan per hari (14 hari terakhir)")
@@ -1125,6 +1591,11 @@ def render_admin_tab() -> None:
                 + (f" · sinyal: {'+'.join(fired)}" if fired else ""))
             st.markdown(f"> {r['text_scrubbed']}")
             st.caption(_report_meta(cfg, r))
+            enr = enrichment_summary(r.get("enrichment"))
+            if enr:
+                st.caption(
+                    f"🌐 Pengayaan intake (info pendukung, **bukan** "
+                    f"penentu label): {enr}")
             st.caption(
                 f"🤖 Saran mesin ({sug_strength}): **{sug_label}** · "
                 f"kategori **{sug_cat}** — {sug_reason}. Keputusan "
@@ -1186,4 +1657,48 @@ def render_admin_tab() -> None:
                 st.rerun()
             if b3.button("🗑️ Hapus", key=f"adm_vdelete_{r['id']}"):
                 delete_report(cfg, r["id"])
+                st.rerun()
+
+    # Tinjauan kedua (v6.0) — pertahanan mutu korpus. Sampel ACAK
+    # laporan terverifikasi dinilai ulang TANPA melihat label tercatat
+    # (buta): yang hasilnya sama masuk SUBSET EMAS; yang berbeda hanya
+    # DICATAT di label_log — label asli tidak berubah oleh tinjauan
+    # kedua, mengubahnya keputusan peninjau utama.
+    st.markdown("#### 🥇 Subset emas — tinjauan kedua")
+    st.caption(
+        f"Subset emas saat ini: **{gold_count(cfg)}** laporan. "
+        "Nilai ulang sampel acak di bawah ini dari teksnya saja — "
+        "label tercatat sengaja tidak ditampilkan. Setiap tinjauan "
+        "tercatat di jejak audit (label_log).")
+    sample = fetch_second_review_sample(cfg, 3)
+    if not sample:
+        st.caption("Tidak ada sampel menunggu tinjauan kedua "
+                   "(semua terverifikasi sudah ditinjau, atau belum "
+                   "ada yang terverifikasi).")
+    for r in sample:
+        with st.container(border=True):
+            st.markdown(
+                f"**Laporan #{r['id']}** · submit "
+                f"{fmt_wita(r['created_at'])} · kanal "
+                f"{CHANNELS.get(r['channel'], r['channel'])}")
+            st.markdown(f"> {r['text_scrubbed']}")
+            sc1, sc2 = st.columns([2, 1])
+            lab2 = sc1.selectbox(
+                "Label menurut penilaianmu (tinjauan kedua)", LABELS,
+                key=f"adm_second_{r['id']}")
+            if sc2.button("✔️ Catat tinjauan kedua",
+                          key=f"adm_second_btn_{r['id']}"):
+                hasil = second_review(cfg, r["id"], lab2)
+                if hasil == "cocok":
+                    st.success(
+                        f"Laporan #{r['id']}: tinjauan kedua COCOK "
+                        "dengan label tercatat — masuk subset emas.")
+                elif hasil == "beda":
+                    st.warning(
+                        f"Laporan #{r['id']}: tinjauan kedua BERBEDA "
+                        "dari label tercatat. Perbedaan dicatat di "
+                        "label_log; label asli tidak berubah.")
+                else:
+                    st.info(f"Laporan #{r['id']} sudah tidak "
+                            "terverifikasi — tinjauan dibatalkan.")
                 st.rerun()

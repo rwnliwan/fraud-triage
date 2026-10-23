@@ -13,3 +13,8 @@ joblib>=1.3
 torch>=2.2,<2.7
 transformers>=4.46,<6
 huggingface_hub>=0.26
+
+# Siskamling v6.0 — OCR tangkapan layar (biner tesseract dipasang
+# lewat packages.txt; Pillow juga dependensi bawaan Streamlit).
+Pillow>=10.0
+pytesseract>=0.3.10
