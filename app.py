@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.4.0.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.5.0.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -15,6 +15,20 @@ Perlakuan / Model / Data & sumber (dataset + asal-usulnya). 2A/2B
 adalah tahap persiapan tanpa skor gerbang (kunci `persiapan` di
 results.json, aditif: journey.py lama mengabaikannya dengan aman).
 Tab ini termuat pada reboot berikutnya.
+
+Baru di v5.5.0 (SISKAMLING DIGITAL — Fase 1): app menjadi layanan
+publik "Siskamling Digital" (ronda warga untuk pesan penipuan) dengan
+mesin Fraud Triage yang sama. Dua tab baru dari modul siskamling.py:
+"📮 Lapor & Cek" — warga menempel pesan, menerima hasil cek awal, dan
+dapat mengirim laporan yang tercatat di database Turso khusus
+Siskamling (nomor laporan unik dari id basis data + tanggal submit
+created_at; teks hanya disimpan hasil scrub PII scrubber.py; nomor
+pengirim hanya sebagai hash bergaram; persetujuan dua tingkat
+CONSENT.md v1 dengan jejak consent_log) — dan "🖼️ Galeri Modus",
+menampilkan hanya laporan terverifikasi + gallery_visible. Kepala
+halaman kini memakai nama Siskamling Digital; Fraud Triage tetap
+dikreditkan sebagai mesin penilai. Modul baru (siskamling.py,
+scrubber.py) termuat pada reboot berikutnya.
 
 Baru di v5.3.4 (info tambahan hasil audit): glosarium kartu benchmark
 (PR-AUC / Recall@FPR1% / ECE) di caption arena; caption expander skor
@@ -135,13 +149,14 @@ import streamlit as st
 from triage_core import TriageEngine, ZONES
 from rules import apply_rules_and_calm, _SIGNAL_NAMES
 from journey import render_journey
+from siskamling import render_lapor_tab, render_gallery_tab
 
-APP_VERSION = "v5.4.0"
+APP_VERSION = "v5.5.0"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
 
-st.set_page_config(page_title="Fraud Triage — Konsol Triase Smishing",
+st.set_page_config(page_title="Siskamling Digital — Lapor & Cek Smishing",
                    page_icon="🛡️", layout="wide",
                    initial_sidebar_state="collapsed")
 
@@ -796,8 +811,9 @@ def signal_panel_md(rule):
 # ---------------------------------------------------------------------------
 st.markdown("""
 <div class="ft-header">
-  <h1>🛡️ Fraud Triage — Konsol Triase Smishing</h1>
-  <p>Tempel teks SMS / pesan mencurigakan dan jalankan analisis. Model:
+  <h1>🏘️ Siskamling Digital — Ronda Warga untuk Pesan Penipuan</h1>
+  <p>Laporkan & cek pesan mencurigakan di tab <b>📮 Lapor & Cek</b>,
+  kenali pola penipuan terbaru di <b>🖼️ Galeri Modus</b>. Mesin penilai:
   <b>Ensemble (Top-3 Terkalibrasi)</b> proyek Fraud Triage, kebijakan dua
   ambang <b>t_close = 0,010</b> · <b>t_esc = 0,135</b>, ditambah lapisan
   aturan kombinasi sinyal kuat yang menaikkan band ke ESKALASI dan
@@ -962,9 +978,10 @@ for _key in ("history", "feedback"):
     if _key not in st.session_state:
         st.session_state[_key] = []
 
-tab_single, tab_batch, tab_eval, tab_journey = st.tabs(
+tab_single, tab_batch, tab_eval, tab_journey, tab_lapor, \
+    tab_gallery = st.tabs(
     ["🔎 Analisis Tunggal", "🗂️ Mode Batch", "🇮🇩 Evaluasi ID",
-     "🧪 Perjalanan Riset"])
+     "🧪 Perjalanan Riset", "📮 Lapor & Cek", "🖼️ Galeri Modus"])
 
 # ---------------------------------------------------------------------------
 # Tab 1 — analisis tunggal
@@ -1527,11 +1544,28 @@ with tab_journey:
     render_journey()
 
 # ---------------------------------------------------------------------------
+# Tab 5 — Siskamling Digital (Fase 1): lapor & cek pesan warga.
+# Laporan tercatat di Turso khusus Siskamling dengan nomor laporan
+# unik + tanggal submit; lihat siskamling.py.
+# ---------------------------------------------------------------------------
+with tab_lapor:
+    render_lapor_tab(
+        engine, analyze_one,
+        lambda a: result_card_html(a, engine.t_close, engine.t_esc))
+
+# ---------------------------------------------------------------------------
+# Tab 6 — Siskamling Digital (Fase 1): galeri modus terverifikasi.
+# ---------------------------------------------------------------------------
+with tab_gallery:
+    render_gallery_tab()
+
+# ---------------------------------------------------------------------------
 # Footer (butir G)
 # ---------------------------------------------------------------------------
 st.markdown("---")
 st.markdown(
-    f'<div class="ft-footer">🛡️ <b>Fraud Triage</b> — app {APP_VERSION} '
+    f'<div class="ft-footer">🏘️ <b>Siskamling Digital</b> · mesin: '
+    f'<b>Fraud Triage</b> — app {APP_VERSION} '
     f'· berjalan di Streamlit Community Cloud · '
     f'<a href="https://github.com/rwnliwan/fraud-triage">Repo GitHub</a>'
     f' · <a href="https://huggingface.co/rwnliwan/fraud-triage-smishing">'

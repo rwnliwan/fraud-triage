@@ -90,6 +90,30 @@ plus CSS kustom di `app.py`.
 - **Kalimat penjelasan vonis** pada kartu hasil + footer berisi versi
   app dan tautan repo/model.
 
+## 🏘️ Siskamling Digital (v5.5.0 — Fase 1)
+
+App ini kini juga menjadi **Siskamling Digital** — layanan ronda warga
+untuk pesan penipuan — dengan mesin Fraud Triage yang sama:
+
+- **📮 Lapor & Cek** — warga menempel pesan, menerima hasil cek awal,
+  dan dapat mengirim laporan. Setiap laporan tercatat dengan **nomor
+  laporan unik** dan **tanggal submit** di basis data Turso khusus
+  (terpisah dari proyek lain). Teks hanya disimpan **setelah
+  dibersihkan dari data pribadi** (`scrubber.py`); nomor pengirim
+  hanya disimpan sebagai **hash satu arah bergaram**, tidak pernah
+  dalam bentuk asli. Persetujuan penggunaan data bersifat dua tingkat
+  (teks persetujuan v1) dan tercatat di log persetujuan; tanpa
+  persetujuan, laporan hanya dipakai untuk cek & verifikasi.
+- **🖼️ Galeri Modus** — hanya menampilkan laporan yang **sudah
+  diverifikasi manusia** dan disetujui tampil. Laporan baru berstatus
+  *menunggu verifikasi* dan tidak tampil di galeri maupun korpus data.
+
+Konfigurasi deploy (Streamlit Cloud → Settings → Secrets — nilai
+**tidak pernah** masuk repo/git): `TURSO_DATABASE_URL`,
+`TURSO_AUTH_TOKEN`, `SISKAMLING_SENDER_SALT`. Tanpa secrets itu, tab
+Lapor & Cek tetap bisa dipakai untuk cek, tetapi laporan tidak
+tersimpan dan galeri tidak aktif.
+
 ## Lapisan aturan (rules layer)
 
 Di atas skor model ada lapisan aturan deterministik (`rules.py`, murni
