@@ -151,7 +151,7 @@ def _heatmap_chart(rows):
         x=alt.X("tahap:N", title=None,
                 axis=alt.Axis(labelAngle=0, labelFontSize=12)),
         y=alt.Y("label:N", title=None, sort=label_order,
-                axis=alt.Axis(labelFontSize=11)),
+                axis=alt.Axis(labelFontSize=11, labelLimit=220)),
         tooltip=[alt.Tooltip("kategori:N", title="Kategori"),
                  alt.Tooltip("tahap:N", title="Tahap"),
                  alt.Tooltip("teks:N", title="Lolos")],
@@ -166,7 +166,20 @@ def _heatmap_chart(rows):
         text="teks:N",
         color=alt.condition(alt.datum.lolos >= 65,
                             alt.value("#0b1220"), alt.value("#f8fafc")))
-    return (rect + text).properties(height=560)
+    layered = rect + text
+    # v5.2.2: SAH dan SMISHING jadi dua panel facet terpisah (header
+    # grup di atas tiap panel) dengan label kategori PENDEK — di v5.1
+    # label "GRUP · nama_kategori" terpotong di layar sempit.
+    if "grup" in data.columns:
+        return layered.properties(height=235).facet(
+            row=alt.Row(
+                "grup:N", title=None, sort=["SAH", "SMISHING"],
+                header=alt.Header(labelFontSize=12,
+                                  labelFontWeight="bold",
+                                  labelPadding=6)),
+            columns=1,
+        ).resolve_scale(y="independent")
+    return layered.properties(height=560)
 
 
 def _bars_html(stages, gates):

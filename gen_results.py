@@ -223,7 +223,11 @@ def _per_kategori(ev, tahap_label):
         grup, _, nama = kat.partition("/")
         rows.append({
             "kategori": kat,
-            "label": f"{grup.upper()} · {nama}",
+            "grup": grup.upper(),
+            # Label PENDEK untuk sumbu heatmap (v5.2.2): tanpa prefiks
+            # grup (grup jadi panel facet sendiri) dan underscore ->
+            # spasi, supaya tidak terpotong di layar sempit.
+            "label": nama.replace("_", " "),
             "tahap": tahap_label,
             "lolos": round(v["lolos_final"] * 100, 1),
         })

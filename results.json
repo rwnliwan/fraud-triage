@@ -82,241 +82,281 @@
  "kategori_heatmap": [
   {
    "kategori": "sah/ecommerce",
-   "label": "SAH · ecommerce",
+   "grup": "SAH",
+   "label": "ecommerce",
    "tahap": "Tahap 2C",
    "lolos": 73.3
   },
   {
    "kategori": "sah/info_rekening",
-   "label": "SAH · info_rekening",
+   "grup": "SAH",
+   "label": "info rekening",
    "tahap": "Tahap 2C",
    "lolos": 86.7
   },
   {
    "kategori": "sah/kantor_internal",
-   "label": "SAH · kantor_internal",
+   "grup": "SAH",
+   "label": "kantor internal",
    "tahap": "Tahap 2C",
    "lolos": 100.0
   },
   {
    "kategori": "sah/keamanan_bank_resmi",
-   "label": "SAH · keamanan_bank_resmi",
+   "grup": "SAH",
+   "label": "keamanan bank resmi",
    "tahap": "Tahap 2C",
    "lolos": 60.0
   },
   {
    "kategori": "sah/kurir_paket",
-   "label": "SAH · kurir_paket",
+   "grup": "SAH",
+   "label": "kurir paket",
    "tahap": "Tahap 2C",
    "lolos": 80.0
   },
   {
    "kategori": "sah/layanan_publik",
-   "label": "SAH · layanan_publik",
+   "grup": "SAH",
+   "label": "layanan publik",
    "tahap": "Tahap 2C",
    "lolos": 93.3
   },
   {
    "kategori": "sah/notif_transaksi_bank",
-   "label": "SAH · notif_transaksi_bank",
+   "grup": "SAH",
+   "label": "notif transaksi bank",
    "tahap": "Tahap 2C",
    "lolos": 86.7
   },
   {
    "kategori": "sah/otp_bank",
-   "label": "SAH · otp_bank",
+   "grup": "SAH",
+   "label": "otp bank",
    "tahap": "Tahap 2C",
    "lolos": 93.3
   },
   {
    "kategori": "sah/pribadi",
-   "label": "SAH · pribadi",
+   "grup": "SAH",
+   "label": "pribadi",
    "tahap": "Tahap 2C",
    "lolos": 100.0
   },
   {
    "kategori": "sah/telco_tagihan_pulsa",
-   "label": "SAH · telco_tagihan_pulsa",
+   "grup": "SAH",
+   "label": "telco tagihan pulsa",
    "tahap": "Tahap 2C",
    "lolos": 66.7
   },
   {
    "kategori": "smishing/apk_malware",
-   "label": "SMISHING · apk_malware",
+   "grup": "SMISHING",
+   "label": "apk malware",
    "tahap": "Tahap 2C",
    "lolos": 73.3
   },
   {
    "kategori": "smishing/blokir_akun",
-   "label": "SMISHING · blokir_akun",
+   "grup": "SMISHING",
+   "label": "blokir akun",
    "tahap": "Tahap 2C",
    "lolos": 100.0
   },
   {
    "kategori": "smishing/cs_palsu_minta_otp",
-   "label": "SMISHING · cs_palsu_minta_otp",
+   "grup": "SMISHING",
+   "label": "cs palsu minta otp",
    "tahap": "Tahap 2C",
    "lolos": 93.3
   },
   {
    "kategori": "smishing/ewallet_hadiah",
-   "label": "SMISHING · ewallet_hadiah",
+   "grup": "SMISHING",
+   "label": "ewallet hadiah",
    "tahap": "Tahap 2C",
    "lolos": 100.0
   },
   {
    "kategori": "smishing/investasi_bodong",
-   "label": "SMISHING · investasi_bodong",
+   "grup": "SMISHING",
+   "label": "investasi bodong",
    "tahap": "Tahap 2C",
    "lolos": 93.3
   },
   {
    "kategori": "smishing/keluarga_darurat",
-   "label": "SMISHING · keluarga_darurat",
+   "grup": "SMISHING",
+   "label": "keluarga darurat",
    "tahap": "Tahap 2C",
    "lolos": 93.3
   },
   {
    "kategori": "smishing/kurir_palsu",
-   "label": "SMISHING · kurir_palsu",
+   "grup": "SMISHING",
+   "label": "kurir palsu",
    "tahap": "Tahap 2C",
    "lolos": 100.0
   },
   {
    "kategori": "smishing/tagihan_palsu",
-   "label": "SMISHING · tagihan_palsu",
+   "grup": "SMISHING",
+   "label": "tagihan palsu",
    "tahap": "Tahap 2C",
    "lolos": 93.3
   },
   {
    "kategori": "smishing/undian_hadiah",
-   "label": "SMISHING · undian_hadiah",
+   "grup": "SMISHING",
+   "label": "undian hadiah",
    "tahap": "Tahap 2C",
    "lolos": 100.0
   },
   {
    "kategori": "smishing/verifikasi_akun_urgensi",
-   "label": "SMISHING · verifikasi_akun_urgensi",
+   "grup": "SMISHING",
+   "label": "verifikasi akun urgensi",
    "tahap": "Tahap 2C",
    "lolos": 100.0
   },
   {
    "kategori": "sah/ecommerce",
-   "label": "SAH · ecommerce",
+   "grup": "SAH",
+   "label": "ecommerce",
    "tahap": "Tahap 2D",
    "lolos": 73.3
   },
   {
    "kategori": "sah/info_rekening",
-   "label": "SAH · info_rekening",
+   "grup": "SAH",
+   "label": "info rekening",
    "tahap": "Tahap 2D",
    "lolos": 100.0
   },
   {
    "kategori": "sah/kantor_internal",
-   "label": "SAH · kantor_internal",
+   "grup": "SAH",
+   "label": "kantor internal",
    "tahap": "Tahap 2D",
    "lolos": 93.3
   },
   {
    "kategori": "sah/keamanan_bank_resmi",
-   "label": "SAH · keamanan_bank_resmi",
+   "grup": "SAH",
+   "label": "keamanan bank resmi",
    "tahap": "Tahap 2D",
    "lolos": 93.3
   },
   {
    "kategori": "sah/kurir_paket",
-   "label": "SAH · kurir_paket",
+   "grup": "SAH",
+   "label": "kurir paket",
    "tahap": "Tahap 2D",
    "lolos": 93.3
   },
   {
    "kategori": "sah/layanan_publik",
-   "label": "SAH · layanan_publik",
+   "grup": "SAH",
+   "label": "layanan publik",
    "tahap": "Tahap 2D",
    "lolos": 100.0
   },
   {
    "kategori": "sah/notif_transaksi_bank",
-   "label": "SAH · notif_transaksi_bank",
+   "grup": "SAH",
+   "label": "notif transaksi bank",
    "tahap": "Tahap 2D",
    "lolos": 100.0
   },
   {
    "kategori": "sah/otp_bank",
-   "label": "SAH · otp_bank",
+   "grup": "SAH",
+   "label": "otp bank",
    "tahap": "Tahap 2D",
    "lolos": 100.0
   },
   {
    "kategori": "sah/pribadi",
-   "label": "SAH · pribadi",
+   "grup": "SAH",
+   "label": "pribadi",
    "tahap": "Tahap 2D",
    "lolos": 100.0
   },
   {
    "kategori": "sah/telco_tagihan_pulsa",
-   "label": "SAH · telco_tagihan_pulsa",
+   "grup": "SAH",
+   "label": "telco tagihan pulsa",
    "tahap": "Tahap 2D",
    "lolos": 73.3
   },
   {
    "kategori": "smishing/apk_malware",
-   "label": "SMISHING · apk_malware",
+   "grup": "SMISHING",
+   "label": "apk malware",
    "tahap": "Tahap 2D",
    "lolos": 100.0
   },
   {
    "kategori": "smishing/blokir_akun",
-   "label": "SMISHING · blokir_akun",
+   "grup": "SMISHING",
+   "label": "blokir akun",
    "tahap": "Tahap 2D",
    "lolos": 100.0
   },
   {
    "kategori": "smishing/cs_palsu_minta_otp",
-   "label": "SMISHING · cs_palsu_minta_otp",
+   "grup": "SMISHING",
+   "label": "cs palsu minta otp",
    "tahap": "Tahap 2D",
    "lolos": 80.0
   },
   {
    "kategori": "smishing/ewallet_hadiah",
-   "label": "SMISHING · ewallet_hadiah",
+   "grup": "SMISHING",
+   "label": "ewallet hadiah",
    "tahap": "Tahap 2D",
    "lolos": 86.7
   },
   {
    "kategori": "smishing/investasi_bodong",
-   "label": "SMISHING · investasi_bodong",
+   "grup": "SMISHING",
+   "label": "investasi bodong",
    "tahap": "Tahap 2D",
    "lolos": 73.3
   },
   {
    "kategori": "smishing/keluarga_darurat",
-   "label": "SMISHING · keluarga_darurat",
+   "grup": "SMISHING",
+   "label": "keluarga darurat",
    "tahap": "Tahap 2D",
    "lolos": 86.7
   },
   {
    "kategori": "smishing/kurir_palsu",
-   "label": "SMISHING · kurir_palsu",
+   "grup": "SMISHING",
+   "label": "kurir palsu",
    "tahap": "Tahap 2D",
    "lolos": 86.7
   },
   {
    "kategori": "smishing/tagihan_palsu",
-   "label": "SMISHING · tagihan_palsu",
+   "grup": "SMISHING",
+   "label": "tagihan palsu",
    "tahap": "Tahap 2D",
    "lolos": 86.7
   },
   {
    "kategori": "smishing/undian_hadiah",
-   "label": "SMISHING · undian_hadiah",
+   "grup": "SMISHING",
+   "label": "undian hadiah",
    "tahap": "Tahap 2D",
    "lolos": 93.3
   },
   {
    "kategori": "smishing/verifikasi_akun_urgensi",
-   "label": "SMISHING · verifikasi_akun_urgensi",
+   "grup": "SMISHING",
+   "label": "verifikasi akun urgensi",
    "tahap": "Tahap 2D",
    "lolos": 93.3
   }

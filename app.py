@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.2.1.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.2.2.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,13 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v5.2.2 (P0 — heatmap & benchmark sidebar): heatmap kategori
+di tab Perjalanan Riset kini memakai label PENDEK dan dua panel facet
+terpisah SAH vs SMISHING (label v5.1 terpotong di layar sempit); panel
+"Benchmark arena" di sidebar diganti daftar kartu ringkas (nama model
++ PR-AUC/recall/ECE) menggantikan dataframe lebar yang tidak terbaca
+tanpa fullscreen.
 
 Baru di v5.2.1 (patch spasi sidebar): kartu status, kotak peringatan,
 dan dropdown detail kini dipisahkan margin eksplisit (0,9rem) — di
@@ -88,7 +95,7 @@ from triage_core import TriageEngine, ZONES
 from rules import apply_rules_and_calm
 from journey import render_journey
 
-APP_VERSION = "v5.2.1"
+APP_VERSION = "v5.2.2"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -210,6 +217,17 @@ footer {visibility: hidden;}
   background: #2b2110; border: 1px solid #a16207;
   color: #fde68a; font-size: 0.84rem; line-height: 1.45;
 }
+.ft-bench-card {
+  background: #0d1526; border: 1px solid #2a3a5f;
+  border-radius: 9px; padding: 0.55rem 0.65rem; margin-bottom: 0.5rem;
+}
+.ft-bench-name {
+  color: #f2f5fb; font-size: 0.85rem; font-weight: 650; line-height: 1.35;
+}
+.ft-bench-stats {
+  color: #8fa1c0; font-size: 0.78rem; margin-top: 0.2rem; line-height: 1.4;
+}
+.ft-bench-stats b { color: #c6d0e4; }
 [data-testid="stSidebar"] [data-testid="stSelectbox"] {
   margin-top: 0.1rem;
 }
@@ -746,9 +764,22 @@ with st.sidebar:
             )
     elif sidebar_detail == "Benchmark arena":
         with st.container(border=True):
-            df_b = pd.DataFrame(BENCHMARK, columns=[
-                "Model", "PR-AUC", "Recall@FPR1%", "ECE kalibrasi"])
-            st.dataframe(df_b, hide_index=True)
+            # v5.2.2: kartu ringkas per model — dataframe lama terlalu
+            # lebar untuk sidebar (kolom angka tak terbaca tanpa
+            # fullscreen). Angka persis sama dengan BENCHMARK.
+            def _fmt3(v):
+                return f"{v:.3f}".replace(".", ",")
+            st.markdown("".join(
+                f'<div class="ft-bench-card">'
+                f'<div class="ft-bench-name">{nama}</div>'
+                f'<div class="ft-bench-stats">PR-AUC <b>{_fmt3(pr)}</b>'
+                f' · Recall@FPR1% <b>{_fmt3(rec)}</b>'
+                f' · ECE <b>{_fmt3(ece)}</b></div></div>'
+                for nama, pr, rec, ece in BENCHMARK
+            ), unsafe_allow_html=True)
+            st.caption(
+                "Arena test notebook Bagian 9 pada test set Inggris "
+                "(UCI). Model operasional = peringkat pertama.")
     elif sidebar_detail == "Tautan & sumber":
         with st.container(border=True):
             st.link_button(
