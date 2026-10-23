@@ -333,11 +333,23 @@ def _render_turnstile(cfg: dict):
     global _ts_component
     import streamlit.components.v1 as components
     if _ts_component is None:
-        _ts_component = components.declare_component(
-            "siskamling_turnstile",
-            path=os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                "turnstile_component"))
+        # Di Streamlit Cloud, aset komponen via `path` tidak terlayani
+        # (terverifikasi di perangkat asli 2026-10-23: widget error
+        # "having trouble loading the component"). Halaman komponen yang
+        # sama dilayani lewat static serving sesama-origin di
+        # /app/static/turnstile.html dan dideklarasikan via url.
+        # Override lokal: SISKAMLING_TS_URL / SISKAMLING_TS_PATH.
+        _ts_url = os.environ.get(
+            "SISKAMLING_TS_URL",
+            "https://fraud-triage-demo.streamlit.app/app/static/"
+            "turnstile.html")
+        _ts_path = os.environ.get("SISKAMLING_TS_PATH")
+        if _ts_path:
+            _ts_component = components.declare_component(
+                "siskamling_turnstile", path=_ts_path)
+        else:
+            _ts_component = components.declare_component(
+                "siskamling_turnstile", url=_ts_url)
     return _ts_component(sitekey=cfg.get("turnstile_site_key"),
                          default=None, key="sk_turnstile")
 
