@@ -335,14 +335,15 @@ def _render_turnstile(cfg: dict):
     if _ts_component is None:
         # Di Streamlit Cloud, aset komponen via `path` tidak terlayani
         # (terverifikasi di perangkat asli 2026-10-23: widget error
-        # "having trouble loading the component"). Halaman komponen yang
-        # sama dilayani lewat static serving sesama-origin di
-        # /app/static/turnstile.html dan dideklarasikan via url.
+        # "having trouble loading the component"), dan static serving
+        # /app/static/ ternyata mengembalikan app shell Streamlit
+        # (bukan berkas komponen) sehingga sinyal componentReady tidak
+        # pernah terkirim. Halaman komponen yang sama kini dilayani
+        # Worker Cloudflare `siskamling-ts` dan dideklarasikan via url.
         # Override lokal: SISKAMLING_TS_URL / SISKAMLING_TS_PATH.
         _ts_url = os.environ.get(
             "SISKAMLING_TS_URL",
-            "https://fraud-triage-demo.streamlit.app/app/static/"
-            "turnstile.html")
+            "https://siskamling-ts.rwnliwan.workers.dev/turnstile.html")
         _ts_path = os.environ.get("SISKAMLING_TS_PATH")
         if _ts_path:
             _ts_component = components.declare_component(
