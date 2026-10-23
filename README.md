@@ -1,8 +1,17 @@
 # 🛡️ Fraud Triage — Aplikasi Triase Smishing (Streamlit)
 
+**Demo live: [fraud-triage-demo.streamlit.app](https://fraud-triage-demo.streamlit.app/)**
+· Model: [Hugging Face `rwnliwan/fraud-triage-smishing`](https://huggingface.co/rwnliwan/fraud-triage-smishing)
+· Notebook proyek: `fraud-triage-laya-vs-ml-dl.ipynb` (arsip riset lengkap Tahap 0–2D)
+
 Aplikasi penyaji model terpilih proyek **Fraud Triage**: **Ensemble (Top-3
 Terkalibrasi)** dengan kebijakan dua ambang operasional **t_close = 0,010**
 dan **t_esc = 0,135** (Bagian 10 notebook `fraud-triage-laya-vs-ml-dl.ipynb`).
+Empat tab: **Analisis Tunggal**, **Mode Batch**, **Evaluasi ID** (panel 16
+pesan + simulator ambang interaktif), dan **Perjalanan Riset** (kronik
+Tahap 0–2D dengan heatmap per kategori). Sidebar ringkas: kartu status
+model + dropdown "Lihat detail" (komposisi, aturan, keterbatasan,
+benchmark arena, tautan).
 
 Pengguna menempel teks SMS → app menampilkan probabilitas scam terkalibrasi,
 keputusan triase (AMAN / Review Analis / Eskalasi) pada kartu hasil berwarna
@@ -134,6 +143,35 @@ tetap ada — obatnya fine-tune dwibahasa dengan data Indonesia berlabel
 
 ---
 
+## Perjalanan riset — Tahap 0 s.d. 2D (ringkasan jujur)
+
+App ini adalah ujung dari busur riset yang didokumentasikan penuh di
+notebook (Bagian 14–17) dan tab **🧪 Perjalanan Riset** di dalam app.
+Klaim "9/10" untuk triase smishing Indonesia diuji dengan **gerbang yang
+ditetapkan di muka** pada set hakim 300 pesan (150 sah / 150 smishing)
+yang tidak pernah jadi data latih:
+
+| Tahap | Intervensi | Sah | Smishing | Smishing AUTO-CLOSE | UCI PR-AUC | Vonis |
+|---|---|---|---|---|---|---|
+| 0 | Baseline full-stack | 16,0% | 87,3% | 0 | 0,986 | Penyakit terdiagnosis: register formal-institusional ID tak dikenal model |
+| 1 | Sinyal penenang (aturan) | 36,0% | 87,3% | 0 | 0,986 | Diterima sebagai app v4 — tambal terukur |
+| 2C | Fine-tune dwibahasa DistilBERT | 84,0% | 94,7% | **3** | 0,986 | **DITOLAK** — gagal tipis di tiga gerbang sekaligus |
+| 2D | Loop perbaikan data (satu-satunya) | **92,7%** | 88,7% | **2** | 0,988 | **DITOLAK** — 2/4 gerbang; klaim 9/10 tidak tercapai |
+
+Gerbang: sah ≥ 85% · smishing ≥ 95% · smishing AUTO-CLOSE = 0 · UCI
+PR-AUC ≥ 0,98. Sesuai doktrin yang dikunci sebelum hasil diketahui —
+satu loop perbaikan lalu dokumentasikan apa adanya — **model app TIDAK
+ditukar** dan penalaan dihentikan: set hakim sudah diamati berulang
+(menala ke arahnya = overfitting), dan riset ketersediaan dataset
+(Oktober 2026) membuktikan bottleneck-nya struktural — **hanya ada satu
+korpus SMS Indonesia asli yang publik (1.143 baris, 3 kelas, era
+2013–2015) dan nol dataset smishing Indonesia publik**, sementara modus
+modern (APK via WhatsApp, pinjol, judol) tidak punya contoh berlabel
+sama sekali. Hasil negatif ini disajikan apa adanya karena rigor
+evaluasinya adalah nilai proyek ini.
+
+---
+
 ## Panel evaluasi Indonesia (v3) — hasil apa adanya
 
 Tab 🇮🇩 Evaluasi ID menjalankan **16 pesan buatan** (8 sah, 8 smishing;
@@ -180,7 +218,8 @@ fp16 untuk model ini), jadi **app tetap fp32**. Penghematan memori
 
 | Berkas | Fungsi |
 |---|---|
-| `app.py` | Antarmuka Streamlit **v4** (Bahasa Indonesia, istilah teknis English): analisis tunggal (batas 2.000 char, kalimat vonis, tombol koreksi + log koreksi sesi), mode batch (progres per pesan, batas 200 baris), ekspor CSV (batch/riwayat/koreksi), tab evaluasi ID, riwayat sesi, panel sinyal, bilah skor, lencana sinyal penenang |
+| `app.py` | Antarmuka Streamlit **v5.4.0** (Bahasa Indonesia, istilah teknis English): analisis tunggal (batas 2.000 char, kalimat vonis, tombol koreksi + log koreksi sesi), mode batch sebagai **antrean prioritas** (terurut skor tertinggi, detail per kasus, unduh laporan kasus .md; batas 200 baris), ekspor CSV (batch/riwayat/koreksi), tab evaluasi ID + simulator ambang, tab perjalanan riset (heatmap dua chart SAH/SMISHING), riwayat sesi, panel sinyal, bilah skor, lencana sinyal penenang, sidebar ringkas (kartu status + benchmark kartu + dropdown detail), CSS responsif mode phone (media query ≤640px/≤480px) |
+| `journey.py` + `results.json` + `gen_results.py` | Tab 🧪 Perjalanan Riset: kronik Tahap 0–2D, diagram gerbang, heatmap kategori 2C vs 2D. `results.json` DIGENERATE oleh `gen_results.py` dari file evaluasi terverifikasi — tidak diketik manual |
 | `triage_core.py` | Logika model murni (tanpa Streamlit): ensemble, kalibrasi temperatur, kebijakan dua ambang, penjelasan faktor |
 | `rules.py` | Lapisan aturan murni regex (tanpa Streamlit): deteksi sinyal teks + aturan kombinasi ≥2 sinyal kuat yang memaksa ESKALASI (hanya menaikkan) + sinyal penenang terbatas (P1/P2/P3) yang menurunkan ESKALASI model satu tingkat ke REVIEW untuk pola resmi berformat jelas |
 | `.streamlit/config.toml` | Tema gelap "fraud ops console" (warna dasar, aksen amber) |
@@ -218,7 +257,7 @@ memori kernel. Karena itu artefak deploy dibangun begini:
    Streamlit Cloud, karena repo GitHub hanya berisi kode), artefak
    diunduh dari repo itu tanpa token. Repo sumber bisa diganti lewat
    env/secrets `ARTIFACT_REPO_ID`.
-3. **Verifikasi pembangunan**: PR-AUC hasil bangun ulang cocok dengan
+4. **Verifikasi pembangunan**: PR-AUC hasil bangun ulang cocok dengan
    angka resmi notebook — LR val 0,968 · Fitur val 0,969 · BERT val 0,978 ·
    Ensemble val 0,982 · **Ensemble test 0,986**.
 
