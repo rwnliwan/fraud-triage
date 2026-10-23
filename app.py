@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v6.1.1.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v6.1.2.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,11 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v6.1.2 (tautan LinkedIn pembuat): sidebar "Tautan &
+sumber" dan footer kini memuat tautan LinkedIn Septian Panjaya di
+samping Repo GitHub & Model Hugging Face (diminta Septian — app
+ini artefak portofolio). Tanpa perubahan perilaku lain.
 
 Baru di v6.1.1 (penyelarasan vonis Perjalanan Riset): bingkai
 vonis gerbang Tahap 2C & 2D di tab Perjalanan Riset kini memakai
@@ -272,7 +277,7 @@ from journey import render_journey
 from siskamling import render_lapor_tab, render_gallery_tab, \
     render_admin_tab
 
-APP_VERSION = "v6.1.1"
+APP_VERSION = "v6.1.2"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -1167,6 +1172,11 @@ with st.sidebar:
                 "https://huggingface.co/rwnliwan/fraud-triage-smishing",
                 use_container_width=True,
             )
+            st.link_button(
+                "LinkedIn — Septian Panjaya",
+                "https://www.linkedin.com/in/septian-panjaya",
+                use_container_width=True,
+            )
             st.caption(
                 "Detail metode, benchmark semua kandidat & vonis ada "
                 "di notebook proyek "
@@ -1787,6 +1797,9 @@ st.markdown(
     f'· berjalan di Streamlit Community Cloud · '
     f'<a href="https://github.com/rwnliwan/fraud-triage">Repo GitHub</a>'
     f' · <a href="https://huggingface.co/rwnliwan/fraud-triage-smishing">'
-    f'Model Hugging Face</a> · Metode & vonis lengkap: notebook proyek '
+    f'Model Hugging Face</a>'
+    f' · <a href="https://www.linkedin.com/in/septian-panjaya">'
+    f'LinkedIn — Septian Panjaya</a> · Metode & vonis lengkap: '
+    f'notebook proyek '
     f'`fraud-triage-laya-vs-ml-dl.ipynb`</div>',
     unsafe_allow_html=True)
