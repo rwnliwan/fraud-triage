@@ -9,7 +9,7 @@ termasuk kegagalannya**.
 **Demo live: [fraud-triage-demo.streamlit.app](https://fraud-triage-demo.streamlit.app/)**
 · Model: [Hugging Face `rwnliwan/fraud-triage-smishing`](https://huggingface.co/rwnliwan/fraud-triage-smishing)
 · Notebook proyek: `fraud-triage-laya-vs-ml-dl.ipynb` (arsip riset lengkap Tahap 0–2D)
-· 📄 Dokumen proyek (edisi terbaru: Laporan v3.3 · Presentasi v3.3): [Laporan Lengkap Proyek (PDF)](docs/laporan-lengkap-proyek.pdf) · [Presentasi LinkedIn (PDF)](docs/presentasi-linkedin.pdf)
+· 📄 Dokumen proyek (edisi terbaru: Laporan v3.3 · Presentasi v3.4): [Laporan Lengkap Proyek (PDF)](docs/laporan-lengkap-proyek.pdf) · [Presentasi LinkedIn (PDF)](docs/presentasi-linkedin.pdf)
 · 📖 Rincian teknis & riset: [docs/RINCIAN.md](docs/RINCIAN.md) · 🚀 Panduan deploy: [docs/DEPLOY.md](docs/DEPLOY.md)
 · 👤 Penulis: [Septian Panjaya — LinkedIn](https://www.linkedin.com/in/septian-panjaya)
 
