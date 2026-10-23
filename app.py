@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.3.1.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.3.2.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,12 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v5.3.2 (paket responsif CSS): media query <=640px/<=480px —
+padding konten dikencangkan dan font metrik/judul diturunkan
+proporsional di mode phone (konten terasa "mengecil" karena padding
+bawaan Streamlit memakan lebar); chart Vega dipastikan selebar
+kontainer. Murni CSS di app.py — termuat tanpa reboot.
 
 Baru di v5.3.1 (patch heatmap): facet Altair v5.2.2 terbukti
 menyusutkan lebar heatmap di layar sempit (sel terdesak, teks persen
@@ -107,7 +113,7 @@ from triage_core import TriageEngine, ZONES
 from rules import apply_rules_and_calm, _SIGNAL_NAMES
 from journey import render_journey
 
-APP_VERSION = "v5.3.1"
+APP_VERSION = "v5.3.2"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -249,6 +255,34 @@ footer {visibility: hidden;}
 [data-testid="stSidebar"] [data-testid="stExpander"],
 [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] {
   margin-top: 0.15rem;
+}
+/* ===== Paket responsif (v5.3.2) — mode phone / layar sempit =====
+   Padding bawaan Streamlit di HP memakan lebar yang seharusnya jadi
+   milik konten (chart terdesak -> terasa "mengecil"). Di <=640px:
+   padding dikencangkan, font metrik & judul diturunkan proporsional,
+   chart Vega dipastikan selebar kontainer. Isi chart sendiri diatur
+   spesifikasinya (dua chart terpisah di journey.py v5.3.1), bukan CSS. */
+@media (max-width: 640px) {
+  .block-container {
+    padding-top: 1.1rem;
+    padding-left: 0.65rem;
+    padding-right: 0.65rem;
+  }
+  h1 { font-size: 1.55rem; }
+  h2 { font-size: 1.28rem; }
+  h3 { font-size: 1.1rem; }
+  [data-testid="stMetricValue"] { font-size: 1.28rem; }
+  [data-testid="stMetricLabel"] { font-size: 0.7rem; }
+  [data-testid="stVegaLiteChart"] { width: 100%; }
+  .ft-side-stats { gap: 0.35rem; }
+  .ft-bench-stats { font-size: 0.74rem; }
+}
+@media (max-width: 480px) {
+  [data-testid="stMetricValue"] { font-size: 1.1rem; }
+  .block-container {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
 }
 </style>
 """, unsafe_allow_html=True)
