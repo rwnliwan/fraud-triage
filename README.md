@@ -126,6 +126,13 @@ untuk pesan penipuan — dengan mesin Fraud Triage yang sama:
   jeda 20 detik antar-kirim per sesi, dan kolom `text_hash` (sidik
   teks ternormalisasi) untuk deteksi duplikat. Monitor lonjakan
   (30 menit) dan ekspor cadangan mingguan berjalan di sisi pengelola.
+  **UI/UX Opsi A + Turnstile dorman** (v5.9.x): tab Lapor & Cek menjadi
+  halaman mendarat, hero warga + vonis bahasa awam (detail teknis
+  dilipat ke expander), saringan kategori di galeri; Cloudflare
+  Turnstile terpasang dorman lewat komponen `turnstile_component/` —
+  aktif hanya bila kedua kunci terpasang di secrets DAN
+  `app_config.turnstile_on='1'` (verifikasi widget dilakukan
+  terkendali di app live sebelum flag dinyalakan untuk warga).
 
 Konfigurasi deploy (Streamlit Cloud → Settings → Secrets — nilai
 **tidak pernah** masuk repo/git): `TURSO_DATABASE_URL`,

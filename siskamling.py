@@ -34,6 +34,7 @@ import json
 import os
 import re
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -113,7 +114,8 @@ WITA = timezone(timedelta(hours=8))
 # ---------------------------------------------------------------------------
 def load_config() -> dict:
     """Ambil kredensial Turso dari secrets/env; lokal: berkas mode 600."""
-    cfg = {"url": None, "token": None, "salt": None, "admin_password": None}
+    cfg = {"url": None, "token": None, "salt": None, "admin_password": None,
+           "turnstile_site_key": None, "turnstile_secret": None}
     try:
         cfg["url"] = st.secrets.get("TURSO_DATABASE_URL")
         cfg["token"] = st.secrets.get("TURSO_AUTH_TOKEN")
@@ -123,6 +125,10 @@ def load_config() -> dict:
     try:
         cfg["admin_password"] = st.secrets.get(
             "SISKAMLING_ADMIN_PASSWORD")
+        cfg["turnstile_site_key"] = st.secrets.get(
+            "SISKAMLING_TURNSTILE_SITE_KEY")
+        cfg["turnstile_secret"] = st.secrets.get(
+            "SISKAMLING_TURNSTILE_SECRET")
     except Exception:
         pass
     cfg["url"] = cfg["url"] or os.environ.get("TURSO_DATABASE_URL")
@@ -130,6 +136,10 @@ def load_config() -> dict:
     cfg["salt"] = cfg["salt"] or os.environ.get("SISKAMLING_SENDER_SALT")
     cfg["admin_password"] = cfg["admin_password"] or os.environ.get(
         "SISKAMLING_ADMIN_PASSWORD")
+    cfg["turnstile_site_key"] = cfg["turnstile_site_key"] or os.environ.get(
+        "SISKAMLING_TURNSTILE_SITE_KEY")
+    cfg["turnstile_secret"] = cfg["turnstile_secret"] or os.environ.get(
+        "SISKAMLING_TURNSTILE_SECRET")
     if not (cfg["url"] and cfg["token"]):
         env_path = os.path.expanduser(
             "~/.config/turso/siskamling-digital.env")
@@ -227,22 +237,106 @@ def text_hash_of(text: str) -> str:
     return hashlib.sha256(normalize_text(text).encode("utf-8")).hexdigest()
 
 
-def intake_open(cfg: dict) -> bool:
-    """Baca kill switch; gagal baca / belum ada baris = TERBUKA."""
+def _config_value(cfg: dict, key: str):
+    """Nilai app_config; None bila baris tak ada / baca gagal."""
     try:
         rows = turso_execute(
-            cfg, "SELECT value FROM app_config WHERE key = 'intake_open'")
-        return (not rows) or rows[0]["value"] != "0"
+            cfg, "SELECT value FROM app_config WHERE key = ?", [key])
+        return rows[0]["value"] if rows else None
     except Exception:
-        return True
+        return None
+
+
+def _set_config(cfg: dict, key: str, value: str) -> None:
+    turso_execute(
+        cfg,
+        "INSERT INTO app_config (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [key, value])
+
+
+def intake_open(cfg: dict) -> bool:
+    """Baca kill switch; gagal baca / belum ada baris = TERBUKA."""
+    return _config_value(cfg, "intake_open") != "0"
 
 
 def set_intake_open(cfg: dict, open_: bool) -> None:
-    turso_execute(
-        cfg,
-        "INSERT INTO app_config (key, value) VALUES ('intake_open', ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        ["1" if open_ else "0"])
+    _set_config(cfg, "intake_open", "1" if open_ else "0")
+
+
+# ---------------------------------------------------------------------------
+# Cloudflare Turnstile (anti-bot) — DORMAN secara desain.
+#
+# Widget hanya aktif bila KEDUA kunci terpasang di secrets/env
+# (SISKAMLING_TURNSTILE_SITE_KEY + SISKAMLING_TURNSTILE_SECRET)
+# DAN app_config 'turnstile_on' = '1'. Membalik flag tidak butuh
+# deploy/reboot modul — jadi aktivasi saat ada indikasi serangan cukup
+# satu flip (oleh pengelola dari tab Verifikasi, oleh asisten via basis
+# data, atau otomatis oleh cron monitor pada lonjakan pertama).
+# Tanpa kunci, flag tidak berpengaruh: formulir warga tidak berubah.
+# ---------------------------------------------------------------------------
+def turnstile_keys_present(cfg: dict) -> bool:
+    return bool(cfg.get("turnstile_site_key")
+                and cfg.get("turnstile_secret"))
+
+
+def turnstile_active(cfg: dict) -> bool:
+    return (turnstile_keys_present(cfg)
+            and _config_value(cfg, "turnstile_on") == "1")
+
+
+def set_turnstile_on(cfg: dict, on: bool) -> None:
+    _set_config(cfg, "turnstile_on", "1" if on else "0")
+
+
+def verify_turnstile(cfg: dict, token) -> bool:
+    """Verifikasi token Turnstile ke Cloudflare siteverify (server-side)."""
+    if not token:
+        return False
+    data = urllib.parse.urlencode(
+        {"secret": cfg.get("turnstile_secret") or "",
+         "response": token}).encode("utf-8")
+    req = urllib.request.Request(
+        "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+        data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded",
+                 "User-Agent": "Mozilla/5.0 (Siskamling Digital)"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return bool(json.loads(
+                resp.read().decode("utf-8")).get("success"))
+    except Exception:
+        return False
+
+
+_ts_component = None
+
+
+def _render_turnstile(cfg: dict):
+    """Tampilkan widget Turnstile; mengembalikan token (atau None)."""
+    global _ts_component
+    import streamlit.components.v1 as components
+    if _ts_component is None:
+        _ts_component = components.declare_component(
+            "siskamling_turnstile",
+            path=os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "turnstile_component"))
+    return _ts_component(sitekey=cfg.get("turnstile_site_key"),
+                         default=None, key="sk_turnstile")
+
+
+def _turnstile_passed(cfg: dict, token) -> bool:
+    """Token lolos siteverify; token yang sama tidak diverifikasi ulang
+    dalam satu sesi (token Turnstile sekali pakai di sisi Cloudflare)."""
+    if not token:
+        return False
+    if st.session_state.get("sk_ts_token") == token:
+        return True
+    if verify_turnstile(cfg, token):
+        st.session_state["sk_ts_token"] = token
+        return True
+    return False
 
 
 def sender_today_count(cfg: dict, sender_hash: str | None) -> int:
@@ -334,6 +428,82 @@ def fmt_wita(utc_text: str | None) -> str:
 # ---------------------------------------------------------------------------
 # Tab Lapor & Cek
 # ---------------------------------------------------------------------------
+def _render_hero(cfg: dict, db_ready: bool) -> None:
+    """Hero warga (UI/UX Opsi A): janji + 3 langkah + bukti sosial."""
+    st.markdown("### 🛡️ Cek dulu, sebelum klik.")
+    st.markdown(
+        "**1.** Tempel pesan mencurigakan di bawah → **2.** Lihat "
+        "vonisnya → **3.** Laporkan, supaya warga lain tidak kena "
+        "modus yang sama.")
+    if db_ready:
+        try:
+            stats = fetch_public_stats(cfg)
+            if stats["verified"] or stats["total"]:
+                st.caption(
+                    f"🏘️ Sudah ada **{stats['verified']} modus "
+                    f"terverifikasi** di galeri dan **{stats['total']} "
+                    "laporan warga** masuk. Setiap laporan diverifikasi "
+                    "manual oleh pengelola sebelum tampil ke publik.")
+        except Exception:
+            pass
+
+
+SIGNAL_WARGA = {
+    "S1": "ada tautan di dalam pesan",
+    "S2": "meminta memasukkan kata sandi / kode OTP / data pribadi "
+          "lewat tautan",
+    "S3": "mengancam akun diblokir atau hangus disertai desakan waktu",
+}
+
+
+def render_citizen_verdict(analysis: dict) -> None:
+    """Vonis bahasa warga + langkah tindakan (UI/UX Opsi A).
+
+    Zona model dipetakan ke tiga tingkat (merah/kuning/hijau) dengan
+    tindakan konkret; bahasanya awam dan tidak melebih-lebihkan —
+    detail teknis (skor, sinyal) tersedia di expander sesudahnya.
+    """
+    zone = analysis["final_zone"]
+    signals = [SIGNAL_WARGA[s] for s in analysis["rule"]["active_signals"]
+               if s in SIGNAL_WARGA]
+    if zone == "ESKALASI":
+        st.error(
+            "🔴 **HAMPIR PASTI PENIPUAN.** Jangan klik tautan apa pun "
+            "di pesan ini dan jangan membalasnya.")
+        st.markdown(
+            "- ⛔ **Jangan pernah berikan kode OTP, PIN, atau kata "
+            "sandi** — bank dan e-wallet TIDAK PERNAH memintanya lewat "
+            "pesan.\n"
+            "- 🚫 **Blokir dan laporkan pengirimnya** di aplikasi "
+            "pesanmu.\n"
+            "- 📞 **Bila kamu sempat mengklik atau mengisi data:** "
+            "segera hubungi bank/e-wallet lewat nomor resmi di kartumu, "
+            "ganti kata sandi, dan pantau mutasi rekeningmu.")
+    elif zone == "REVIEW ANALIS":
+        st.warning(
+            "🟡 **MENCURIGAKAN — anggap penipuan sampai terbukti "
+            "sebaliknya.** Pesan ini punya tanda bahaya, meski "
+            "buktinya belum cukup untuk vonis pasti.")
+        st.markdown(
+            "- Jangan bertindak dari pesan ini. **Buka aplikasi resmi "
+            "sendiri** (ketik manual), jangan lewat tautan di pesan.\n"
+            "- Bila mengaku dari bank/instansi, **telepon nomor "
+            "resmi** di kartu atau situs resmi mereka — bukan nomor "
+            "yang ada di pesan.")
+    else:
+        st.success(
+            "🟢 **Kemungkinan besar aman.** Tidak ditemukan tanda "
+            "penipuan yang kuat pada pesan ini.")
+        st.markdown(
+            "Tetap waspada: ini penilaian otomatis, **bukan jaminan**. "
+            "Jangan kirim uang atau kode hanya karena sebuah pesan "
+            "lolos cek — penipu terus berganti modus. Bila ragu, "
+            "tanyakan dulu ke orang yang kamu percaya.")
+    if signals:
+        st.markdown("**Tanda bahaya yang ditemukan:** "
+                    + "; ".join(signals) + ".")
+
+
 def render_lapor_tab(engine, analyze_one, card_html) -> None:
     st.markdown("### 📮 Lapor & Cek Pesan Mencurigakan")
     st.markdown(
@@ -342,11 +512,12 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
         "Tunggal, dan Anda dapat **melaporkannya** agar warga lain "
         "terlindungi. Setiap laporan tercatat dengan **nomor laporan "
         "unik** dan **tanggal submit** sebagai bukti penerimaan.")
+    cfg = load_config()
+    db_ready = bool(cfg.get("url") and cfg.get("token"))
+    _render_hero(cfg, db_ready)
     with st.expander("Baca dulu — cara kerja, data & persetujuan (v1)"):
         st.markdown(CONSENT_TEXT_V1)
 
-    cfg = load_config()
-    db_ready = bool(cfg.get("url") and cfg.get("token"))
     if not db_ready:
         st.warning(
             "Penyimpanan laporan belum aktif pada deployment ini "
@@ -356,12 +527,14 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
     # Hardening Fase 2.5: status kill switch + pemutus antrean.
     intake_is_open = True
     queue_full = False
+    ts_active = False
     if db_ready:
         try:
             intake_is_open = intake_open(cfg)
             queue_full = count_status(cfg, "pending") >= MAX_PENDING_OPEN
+            ts_active = turnstile_active(cfg)
         except Exception:
-            intake_is_open, queue_full = True, False
+            intake_is_open, queue_full, ts_active = True, False, False
     if db_ready and not intake_is_open:
         st.warning(
             "⏸️ **Penerimaan laporan sedang ditutup sementara** oleh "
@@ -391,6 +564,13 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
         "hanya saja tidak tampil di galeri dan tidak dipakai sebagai "
         "data latih.")
 
+    ts_token = None
+    if ts_active:
+        st.markdown(
+            "**Verifikasi anti-bot aktif** — selesaikan uji singkat "
+            "berikut sebelum mengirim (melindungi layanan dari bot):")
+        ts_token = _render_turnstile(cfg)
+
     if st.button("🔍 Cek & Kirim Laporan", type="primary",
                  key="btn_sk_submit"):
         raw = (text or "").strip()
@@ -401,6 +581,12 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
             st.warning(
                 f"Baru saja mengirim — tunggu ±{SESSION_COOLDOWN_SEC} "
                 "detik sebelum mengirim lagi (perlindungan anti-banjir).")
+        elif ts_active and not _turnstile_passed(cfg, ts_token):
+            st.warning(
+                "Verifikasi anti-bot belum selesai atau gagal — "
+                "selesaikan uji singkatnya di atas, lalu klik "
+                "**Cek & Kirim Laporan** sekali lagi. Cek belum "
+                "dijalankan agar layanan terlindung dari bot.")
         else:
             # Gerbang simpan (hardening): kill switch, pemutus antrean,
             # batas per pengirim & batas harian global. Hasil CEK tetap
@@ -473,8 +659,11 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
                     "untuk cek & verifikasi)."))
     analysis = st.session_state.get("sk_last")
     if analysis:
-        st.markdown("#### Hasil cek awal pesan ini")
-        st.markdown(card_html(analysis), unsafe_allow_html=True)
+        st.markdown("#### Hasil cek pesan ini")
+        render_citizen_verdict(analysis)
+        with st.expander("🔬 Detail teknis — skor model & sinyal",
+                         expanded=False):
+            st.markdown(card_html(analysis), unsafe_allow_html=True)
         st.caption(
             "Hasil cek adalah triase awal, bukan vonis. Jangan pernah "
             "membagikan kode OTP, PIN, atau kata sandi kepada siapa "
@@ -511,6 +700,22 @@ def render_gallery_tab() -> None:
                 "Laporan warga yang masuk sedang menunggu verifikasi — "
                 "galeri terisi dari tab **📮 Lapor & Cek**.")
         return
+    cat_labels = {
+        "blokir_akun": "Ancaman blokir akun", "otp_palsu": "OTP palsu",
+        "resi_paket": "Resi / paket", "undian": "Undian / hadiah",
+        "apk": "Suruh pasang APK", "investasi": "Investasi bodong",
+        "tagihan": "Tagihan palsu", "lainnya": "Lainnya"}
+    choice = st.selectbox(
+        "Saring menurut kategori modus",
+        options=["semua"] + CATEGORIES,
+        format_func=lambda s: "Semua kategori" if s == "semua"
+        else cat_labels.get(s, s),
+        key="gal_filter")
+    if choice != "semua":
+        rows = [r for r in rows if r.get("category_modus") == choice]
+        if not rows:
+            st.info("Belum ada modus terverifikasi pada kategori ini.")
+            return
     for r in rows:
         with st.container(border=True):
             badge = BAND_BADGE.get(r["model_band"], r["model_band"] or "-")
@@ -883,6 +1088,26 @@ def render_admin_tab() -> None:
         if ic2.button("🟢 Buka intake", key="btn_intake_open"):
             set_intake_open(cfg, True)
             st.rerun()
+    # Kontrol Turnstile (dorman): status + saklar flag. Widget hanya
+    # benar-benar tampil bila kunci juga terpasang di secrets.
+    ts_keys = turnstile_keys_present(cfg)
+    ts_on = _config_value(cfg, "turnstile_on") == "1"
+    tc1, tc2 = st.columns([3, 1])
+    if ts_keys and ts_on:
+        tc1.caption("Anti-bot Turnstile: **AKTIF** di formulir warga.")
+        if tc2.button("🛡️ Matikan Turnstile", key="btn_ts_off"):
+            set_turnstile_on(cfg, False)
+            st.rerun()
+    elif ts_keys:
+        tc1.caption("Anti-bot Turnstile: kunci terpasang, **siaga** "
+                    "(belum aktif).")
+        if tc2.button("🛡️ Aktifkan Turnstile", key="btn_ts_on"):
+            set_turnstile_on(cfg, True)
+            st.rerun()
+    else:
+        tc1.caption("Anti-bot Turnstile: **dorman** — kunci belum "
+                    "terpasang di secrets; formulir warga berjalan "
+                    "tanpa CAPTCHA.")
     _render_analytics(cfg)
 
     st.markdown("#### Antrean pending — risiko tertinggi di atas")

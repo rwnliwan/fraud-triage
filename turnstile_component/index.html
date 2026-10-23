@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div id="ts"></div>
+<script>
+  // Komponen Turnstile Siskamling Digital — protokol komponen Streamlit
+  // ditulis manual (tanpa pustaka tambahan): componentReady ->
+  // streamlit:render (args.sitekey) -> setComponentValue(token).
+  var sitekey = null;
+  var widgetId = null;
+  var renderReceived = false;
+  var readyTries = 0;
+  var readyTimer = null;
+
+  function send(type, data) {
+    var msg = {type: type};
+    if (data) { for (var k in data) { msg[k] = data[k]; } }
+    window.parent.postMessage(msg, "*");
+  }
+
+  function sendReady() {
+    send("streamlit:componentReady", {apiVersion: 1});
+    send("streamlit:setFrameHeight", {height: 80});
+  }
+
+  function maybeRender() {
+    if (!sitekey || !window.turnstile || widgetId !== null) { return; }
+    widgetId = window.turnstile.render("#ts", {
+      sitekey: sitekey,
+      callback: function (token) {
+        send("streamlit:setComponentValue", {value: token, dataType: "json"});
+      },
+      "expired-callback": function () {
+        send("streamlit:setComponentValue", {value: null, dataType: "json"});
+      },
+      "error-callback": function () {
+        send("streamlit:setComponentValue", {value: null, dataType: "json"});
+      }
+    });
+    send("streamlit:setFrameHeight", {height: 80});
+  }
+
+  window.addEventListener("message", function (event) {
+    if (event.data && event.data.type === "streamlit:render") {
+      renderReceived = true;
+      if (readyTimer) { clearInterval(readyTimer); }
+      sitekey = (event.data.args || {}).sitekey;
+      maybeRender();
+    }
+  });
+
+  var s = document.createElement("script");
+  s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTsLoad";
+  s.async = true;
+  s.defer = true;
+  document.head.appendChild(s);
+  window.onTsLoad = function () { maybeRender(); };
+
+  // componentReady dikirim BERULANG sampai render pertama diterima:
+  // satu pengiriman saat parse bisa kalah balapan dengan navigasi
+  // iframe (dokumen awal about:blank) sehingga induk tak pernah
+  // mengirim render. Pola kirim-ulang ini yang membuat jabat tangan
+  // komponen andal.
+  sendReady();
+  readyTimer = setInterval(function () {
+    readyTries += 1;
+    if (renderReceived || readyTries > 40) {
+      clearInterval(readyTimer);
+      return;
+    }
+    sendReady();
+  }, 800);
+</script>
+</body>
+</html>

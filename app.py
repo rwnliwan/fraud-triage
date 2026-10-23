@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.8.0.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.9.1.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -15,6 +15,34 @@ Perlakuan / Model / Data & sumber (dataset + asal-usulnya). 2A/2B
 adalah tahap persiapan tanpa skor gerbang (kunci `persiapan` di
 results.json, aditif: journey.py lama mengabaikannya dengan aman).
 Tab ini termuat pada reboot berikutnya.
+
+Baru di v5.9.1 (SISKAMLING DIGITAL — ketahanan integrasi Turnstile):
+token Turnstile yang sudah lolos verifikasi dipakai ulang selama sesi
+dari nilai komponen yang masih berlaku — klik kirim tidak perlu
+memverifikasi ulang token sekali pakai ke Cloudflare.
+
+Baru di v5.9.0 (SISKAMLING DIGITAL — UI/UX Opsi A + Turnstile dorman):
+(1) Perjalanan warga dirapikan: tab 📮 Lapor & Cek menjadi tab pertama
+(halaman mendarat) dan 🖼️ Galeri kedua, konsol riset menyusul; hero
+"Cek dulu, sebelum klik" + 3 langkah + bukti sosial (modus
+terverifikasi & laporan masuk) di tab Lapor; hasil cek kini membuka
+dengan VONIS BAHASA WARGA (🔴 hampir pasti penipuan / 🟡 mencurigakan
+/ 🟢 kemungkinan aman) + langkah tindakan konkret + tanda bahaya
+dalam bahasa awam, sedangkan kartu teknis (skor & sinyal) dilipat ke
+expander "Detail teknis"; galeri mendapat saringan kategori modus.
+(2) Cloudflare Turnstile TERPASANG DORMAN (komponen
+turnstile_component/ + verifikasi server siteverify di siskamling.py):
+widget hanya tampil bila SISKAMLING_TURNSTILE_SITE_KEY +
+SISKAMLING_TURNSTILE_SECRET terpasang di secrets DAN app_config
+turnstile_on='1' — aktivasi cukup membalik flag (tab Verifikasi atau
+asisten via basis data), tanpa deploy ulang. Tanpa kunci: formulir
+warga tidak berubah. CATATAN QA: logika flag + siteverify teruji
+penuh secara fungsi; jabat tangan widget di peramban TIDAK bisa
+dibuktikan dari Chromium sandbox VM ini (komponen minimal kanonis
+pun gagal identik di sandbox — batasan lingkungan uji, protokolnya
+persis mengikuti kode host Streamlit), jadi verifikasi widget
+dilakukan TERKENDALI di app live pasca-deploy sebelum flag boleh
+dinyalakan untuk warga.
 
 Baru di v5.8.0 (SISKAMLING DIGITAL — Fase 2.5 Hardening): pertahanan
 formulir publik tanpa dependensi luar (siskamling.py + migrasi DB
@@ -191,7 +219,7 @@ from journey import render_journey
 from siskamling import render_lapor_tab, render_gallery_tab, \
     render_admin_tab
 
-APP_VERSION = "v5.8.0"
+APP_VERSION = "v5.9.1"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -1018,10 +1046,13 @@ for _key in ("history", "feedback"):
     if _key not in st.session_state:
         st.session_state[_key] = []
 
-tab_single, tab_batch, tab_eval, tab_journey, tab_lapor, \
-    tab_gallery, tab_admin = st.tabs(
-    ["🔎 Analisis Tunggal", "🗂️ Mode Batch", "🇮🇩 Evaluasi ID",
-     "🧪 Perjalanan Riset", "📮 Lapor & Cek", "🖼️ Galeri Modus",
+# Urutan tab (UI/UX Opsi A, v5.9.0): layanan WARGA dulu — Lapor & Cek
+# adalah tab pertama (halaman mendarat) dan Galeri kedua; konsol riset
+# analis menyusul; Verifikasi (admin) tetap terakhir.
+tab_lapor, tab_gallery, tab_single, tab_batch, tab_eval, \
+    tab_journey, tab_admin = st.tabs(
+    ["📮 Lapor & Cek", "🖼️ Galeri Modus", "🔎 Analisis Tunggal",
+     "🗂️ Mode Batch", "🇮🇩 Evaluasi ID", "🧪 Perjalanan Riset",
      "🔐 Verifikasi"])
 
 # ---------------------------------------------------------------------------
