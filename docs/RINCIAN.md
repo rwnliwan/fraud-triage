@@ -135,26 +135,26 @@ untuk pesan penipuan — dengan mesin Fraud Triage yang sama:
   progres korpus per label menuju target ±1.000 (retrain Tahap 3), dan
   kategori modus terbanyak — semua dari data laporan, **bukan** jumlah
   views halaman (app tidak dapat menghitung penontonnya sendiri).
-  **Fase 2.5 Hardening** (v5.8.0): kill switch penerimaan laporan di
-  tabel `app_config` (tombol di tab Verifikasi; keadaan darurat juga
-  bisa dibalik langsung di basis data), batas laju 10 laporan per
-  pengirim per hari + 300 per hari + pemutus antrean pada 500 pending,
-  jeda 20 detik antar-kirim per sesi, dan kolom `text_hash` (sidik
+  **Fase 2.5 Hardening** (v5.8.0): saklar pemutus penerimaan laporan
+  di konfigurasi server (tombol di tab Verifikasi; keadaan darurat
+  juga bisa dibalik langsung di basis data), batas laju berlapis per
+  pengirim dan global per hari, pemutus antrean pada ambang pending
+  tertentu, jeda antar-kirim per sesi, dan kolom `text_hash` (sidik
   teks ternormalisasi) untuk deteksi duplikat. Monitor lonjakan
-  (30 menit) dan ekspor cadangan mingguan berjalan di sisi pengelola.
+  berkala dan ekspor cadangan mingguan berjalan di sisi pengelola.
   **UI/UX Opsi A + Turnstile** (v5.9.x): tab Lapor & Cek menjadi
   halaman mendarat, hero warga + vonis bahasa awam (detail teknis
   dilipat ke expander), saringan kategori di galeri; Cloudflare
   Turnstile pada rilis ini dipasang dorman — aktif hanya bila kedua
-  kunci terpasang di secrets DAN `app_config.turnstile_on='1'`.
+  kunci terpasang di secrets dan fitur diaktifkan dari konfigurasi
+  server.
   **Status kini: Turnstile AKTIF permanen sejak 23 Okt 2026** — flag
   dinyalakan setelah widget terverifikasi terkendali di perangkat
   asli (laporan uji lolos verifikasi server, lalu dibersihkan).
   Halaman komponennya tidak lagi dilayani dari path lokal
   `turnstile_component/` (salinan sumbernya tetap di repo sebagai
-  acuan), melainkan dari Cloudflare Worker
-  `siskamling-ts.rwnliwan.workers.dev` — URL bawaan di `siskamling.py`,
-  dapat ditimpa via env `SISKAMLING_TS_URL`/`SISKAMLING_TS_PATH`.
+  acuan), melainkan dari Cloudflare Worker khusus yang URL-nya
+  diatur lewat konfigurasi server.
   **v6.1.x (Okt 2026) — tindak lanjut kritik eksternal atas Laporan
   Edisi v3.2:** Laporan naik ke Edisi v3.3 (CI Wilson 95% + vonis
   tiga status — *lolos jelas / tidak meyakinkan / gagal jelas* —
