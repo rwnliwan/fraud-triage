@@ -3,7 +3,7 @@
 **Demo live: [fraud-triage-demo.streamlit.app](https://fraud-triage-demo.streamlit.app/)**
 · Model: [Hugging Face `rwnliwan/fraud-triage-smishing`](https://huggingface.co/rwnliwan/fraud-triage-smishing)
 · Notebook proyek: `fraud-triage-laya-vs-ml-dl.ipynb` (arsip riset lengkap Tahap 0–2D)
-· 📄 Dokumen proyek (edisi v2): [Laporan Lengkap Proyek (PDF)](docs/laporan-lengkap-proyek.pdf) · [Presentasi LinkedIn (PDF)](docs/presentasi-linkedin.pdf)
+· 📄 Dokumen proyek (edisi terbaru: Laporan v3.1 · Presentasi v3.2): [Laporan Lengkap Proyek (PDF)](docs/laporan-lengkap-proyek.pdf) · [Presentasi LinkedIn (PDF)](docs/presentasi-linkedin.pdf)
 · 👤 Penulis: [Septian Panjaya — LinkedIn](https://www.linkedin.com/in/septian-panjaya)
 
 ## 🏘️ Siskamling Digital — layanan publik (live)
@@ -26,9 +26,80 @@ tab pertama yang menyambut pengunjung:
   antrean, kill switch intake, deteksi duplikat, monitor lonjakan,
   dan Cloudflare Turnstile terpasang dorman (aktif saat dibutuhkan).
 
+**Baru di v6.0** (gelombang riset kompetitor — menutup celah yang
+ditunjukkan pemetaan lanskap di bawah):
+
+- **🆘 Kartu langkah darurat berkeadaan** — sesudah vonis, warga
+  memilih keadaannya (belum klik tautan / sudah klik / sudah memberi
+  OTP atau data / uang sudah terkirim) dan menerima langkah yang
+  sesuai keadaan itu, bukan vonis generik: keadaan terberat menaruh
+  langkah tercepat paling atas (hubungi bank + lapor
+  [IASC OJK](https://iasc.ojk.go.id) agar rekening pelaku bisa
+  dibekukan), lengkap dengan tautan resmi
+  [cekrekening.id](https://cekrekening.id) dan
+  [aduannomor.id](https://aduannomor.id).
+- **🔎 Nomor lacak laporan** — nomor laporan sekaligus nomor lacak:
+  warga dapat memeriksa status pemeriksaannya (menunggu / sudah
+  diperiksa + label hasil) tanpa data lain apa pun ditampilkan.
+  Loop laporan kini tertutup, bukan jalan satu arah.
+- **📷 Intake tangkapan layar + OCR** — warga boleh mengunggah
+  tangkapan layar pesan; teks dibaca OCR (Bahasa Indonesia + Inggris)
+  lalu **diedit warga dulu** sebelum masuk alur cek/lapor yang sama.
+  OCR gagal tidak menggagalkan apa pun — tempel teks tetap bisa.
+- **🌐 Pengayaan domain saat intake** — domain dalam laporan dicek
+  umurnya lewat RDAP publik dan disimpan sebagai info pendukung
+  verifikasi; pengayaan tidak pernah menentukan label.
+- **🛡️ Anti-racun korpus** — korpus dari warga bisa diserang laporan
+  palsu, jadi v6.0 menambah: batas 3 laporan per teks yang sama per
+  hari, jejak audit setiap perubahan label (`label_log`), dan
+  **tinjauan kedua buta** atas sampel laporan terverifikasi — yang
+  cocok antar-peninjau menjadi **subset emas** tolok ukur korpus.
+
 Misi datanya: membangun **korpus smishing Bahasa Indonesia berlabel
 manusia** — riset proyek ini menemukan belum ada korpus publik
-semacam itu. Detail fase & desainnya ada di riwayat commit (v5.5–v5.9).
+semacam itu. Detail fase & desainnya ada di riwayat commit (v5.5–v6.0).
+
+## 🗺️ Posisi di lanskap (riset Oktober 2026)
+
+Pemetaan 13 pembanding — layanan resmi Indonesia (cekrekening.id,
+aduannomor.id, IASC/OJK), analog global (ScamShield Singapura,
+Norton Genie, Bitdefender Scamio, Google Messages, Truecaller,
+Indosat SATSPAM, 7726, Scamwatch), korpus kerumunan (SmishTank,
+PhishTank), dan model akademik tipikal — menemukan **tidak ada satu
+pun yang menggabungkan semua unsur proyek ini**: vonis tempel-pesan
+Bahasa Indonesia berbahasa warga + intake laporan + galeri modus +
+**label hanya oleh manusia** + korpus terbuka berlabel manusia +
+model & kode terbuka + gerbang evaluasi yang ditetapkan di muka
+dengan **kegagalan 2/4 yang dipublikasikan**. Layanan resmi berhenti
+di cek nomor/rekening dan lapor-blokir (tanpa vonis isi pesan, tanpa
+korpus terbuka); pemeriksa global menilai isi pesan tetapi berbahasa
+Inggris, tertutup, dan tanpa evaluasi publik; model akademik
+melaporkan akurasi 97–99% di potongan acak tanpa gerbang keselamatan.
+Batas klaim ini dinyatakan apa adanya: **"tidak ditemukan" bukan
+"tidak ada"** — pemetaan dibatasi sumber yang dapat diindeks, dan
+dua situs resmi tidak dapat dicek langsung saat riset berlangsung.
+Di mana pembanding unggul (jangkauan dalam-kotak-pesan/jaringan,
+input tangkapan layar, penutupan kabar laporan, eskalasi lembaga),
+v6.0 di atas adalah jawaban tahap pertamanya. Laporan riset
+lengkapnya diringkas di Bagian 13 Laporan Lengkap proyek.
+
+## 🔮 Rencana Tahap 3 & prinsip arena terbuka
+
+Korpus yang tumbuh dari laporan warga adalah bahan **Tahap 3**:
+pelatihan ulang kandidat model Indonesia — dinilai pada **set hakim
+baru** (set 300 yang lama sudah teramati berulang dan tidak dipakai
+lagi), dengan **gerbang yang dikunci di muka**, persis doktrin yang
+membuat klaim 9/10 proyek ini gagal secara terhormat. Kandidatnya
+termasuk **Laya** (DistilBERT dwibahasa proyek ini) dalam
+**pertandingan ulang yang setara** — lihat keterbatasan evaluasinya
+di bawah — dan model rilis terbaru apa pun yang tersedia saat itu.
+
+Prinsipnya: **gerbangnya tetap, modelnya berganti.** Arena penilaian
+bersifat terbuka — setiap model baru berhak diuji dengan syarat yang
+sama persis, tidak ada yang diistimewakan, termasuk model proyek ini
+sendiri. Yang dipertahankan bukan modelnya, melainkan standarnya.
+Itu juga jawaban atas dua arah perubahan: teknologi model yang terus
+berilis baru, dan modus penipuan yang terus bermutasi.
 
 ## 🎬 Demo
 
