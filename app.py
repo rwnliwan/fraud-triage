@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.5.0.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.6.0.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -15,6 +15,21 @@ Perlakuan / Model / Data & sumber (dataset + asal-usulnya). 2A/2B
 adalah tahap persiapan tanpa skor gerbang (kunci `persiapan` di
 results.json, aditif: journey.py lama mengabaikannya dengan aman).
 Tab ini termuat pada reboot berikutnya.
+
+Baru di v5.6.0 (SISKAMLING DIGITAL — Fase 2): tab ketujuh
+"🔐 Verifikasi" — ruang kerja verifikasi admin di siskamling.py,
+terkunci kata sandi (secret SISKAMLING_ADMIN_PASSWORD; tab hanya
+menampilkan formulir kunci sampai sandi benar). Antrean pending
+terurut skor risiko dengan SARAN mesin per laporan (label + kategori
+dari band/sinyal model — saran, bukan keputusan: label hanya
+ditentukan manusia, sesuai desain Fase 0, karena korpus harus berisi
+penilaian manusia yang independen dari model). Aksi peninjau:
+verifikasi (label SAH/SMISHING/SPAM_PROMO + kategori modus + opsi
+tampil galeri), tolak, hapus lunak (status deleted — keluar dari
+galeri & korpus), serta kelola yang sudah terverifikasi (tampil/
+sembunyi galeri, kembalikan ke antrean, hapus). Metrik kepala:
+pending / terverifikasi / baris corpus_export. Modul berubah
+(siskamling.py) — termuat pada reboot berikutnya.
 
 Baru di v5.5.0 (SISKAMLING DIGITAL — Fase 1): app menjadi layanan
 publik "Siskamling Digital" (ronda warga untuk pesan penipuan) dengan
@@ -149,9 +164,10 @@ import streamlit as st
 from triage_core import TriageEngine, ZONES
 from rules import apply_rules_and_calm, _SIGNAL_NAMES
 from journey import render_journey
-from siskamling import render_lapor_tab, render_gallery_tab
+from siskamling import render_lapor_tab, render_gallery_tab, \
+    render_admin_tab
 
-APP_VERSION = "v5.5.0"
+APP_VERSION = "v5.6.0"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -979,9 +995,10 @@ for _key in ("history", "feedback"):
         st.session_state[_key] = []
 
 tab_single, tab_batch, tab_eval, tab_journey, tab_lapor, \
-    tab_gallery = st.tabs(
+    tab_gallery, tab_admin = st.tabs(
     ["🔎 Analisis Tunggal", "🗂️ Mode Batch", "🇮🇩 Evaluasi ID",
-     "🧪 Perjalanan Riset", "📮 Lapor & Cek", "🖼️ Galeri Modus"])
+     "🧪 Perjalanan Riset", "📮 Lapor & Cek", "🖼️ Galeri Modus",
+     "🔐 Verifikasi"])
 
 # ---------------------------------------------------------------------------
 # Tab 1 — analisis tunggal
@@ -1558,6 +1575,13 @@ with tab_lapor:
 # ---------------------------------------------------------------------------
 with tab_gallery:
     render_gallery_tab()
+
+# ---------------------------------------------------------------------------
+# Tab 7 — Siskamling Digital (Fase 2): verifikasi admin (terkunci
+# kata sandi; label hanya ditentukan manusia, model hanya menyarankan).
+# ---------------------------------------------------------------------------
+with tab_admin:
+    render_admin_tab()
 
 # ---------------------------------------------------------------------------
 # Footer (butir G)

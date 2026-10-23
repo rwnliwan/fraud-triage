@@ -107,12 +107,21 @@ untuk pesan penipuan — dengan mesin Fraud Triage yang sama:
 - **🖼️ Galeri Modus** — hanya menampilkan laporan yang **sudah
   diverifikasi manusia** dan disetujui tampil. Laporan baru berstatus
   *menunggu verifikasi* dan tidak tampil di galeri maupun korpus data.
+- **🔐 Verifikasi** (Fase 2, v5.6.0) — ruang kerja peninjau terkunci
+  kata sandi. Antrean laporan pending terurut risiko, lengkap dengan
+  **saran** label & kategori modus dari model — tetapi **label akhir
+  selalu ditentukan manusia**, agar korpus berisi penilaian yang
+  independen dari model. Dari sini laporan diverifikasi (masuk korpus
+  bila ada consent; opsional tampil di galeri), ditolak, dihapus, atau
+  dikembalikan ke antrean.
 
 Konfigurasi deploy (Streamlit Cloud → Settings → Secrets — nilai
 **tidak pernah** masuk repo/git): `TURSO_DATABASE_URL`,
-`TURSO_AUTH_TOKEN`, `SISKAMLING_SENDER_SALT`. Tanpa secrets itu, tab
-Lapor & Cek tetap bisa dipakai untuk cek, tetapi laporan tidak
-tersimpan dan galeri tidak aktif.
+`TURSO_AUTH_TOKEN`, `SISKAMLING_SENDER_SALT`,
+`SISKAMLING_ADMIN_PASSWORD`. Tanpa secrets Turso, tab Lapor & Cek
+tetap bisa dipakai untuk cek, tetapi laporan tidak tersimpan dan
+galeri tidak aktif; tanpa kata sandi admin, tab Verifikasi tidak
+aktif.
 
 ## Lapisan aturan (rules layer)
 

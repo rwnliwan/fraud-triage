@@ -29,6 +29,7 @@ render menerima engine + callback analisis dari app.py.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import urllib.request
@@ -110,16 +111,23 @@ WITA = timezone(timedelta(hours=8))
 # ---------------------------------------------------------------------------
 def load_config() -> dict:
     """Ambil kredensial Turso dari secrets/env; lokal: berkas mode 600."""
-    cfg = {"url": None, "token": None, "salt": None}
+    cfg = {"url": None, "token": None, "salt": None, "admin_password": None}
     try:
         cfg["url"] = st.secrets.get("TURSO_DATABASE_URL")
         cfg["token"] = st.secrets.get("TURSO_AUTH_TOKEN")
         cfg["salt"] = st.secrets.get("SISKAMLING_SENDER_SALT")
     except Exception:
         pass
+    try:
+        cfg["admin_password"] = st.secrets.get(
+            "SISKAMLING_ADMIN_PASSWORD")
+    except Exception:
+        pass
     cfg["url"] = cfg["url"] or os.environ.get("TURSO_DATABASE_URL")
     cfg["token"] = cfg["token"] or os.environ.get("TURSO_AUTH_TOKEN")
     cfg["salt"] = cfg["salt"] or os.environ.get("SISKAMLING_SENDER_SALT")
+    cfg["admin_password"] = cfg["admin_password"] or os.environ.get(
+        "SISKAMLING_ADMIN_PASSWORD")
     if not (cfg["url"] and cfg["token"]):
         env_path = os.path.expanduser(
             "~/.config/turso/siskamling-digital.env")
@@ -388,3 +396,305 @@ def render_gallery_tab() -> None:
             st.markdown(f"> {r['text_scrubbed']}")
             st.caption(f"Diverifikasi {fmt_wita(r['verified_at'])} · "
                        f"dilaporkan {fmt_wita(r['created_at'])}")
+
+
+# ---------------------------------------------------------------------------
+# Fase 2 — Verifikasi admin (tab "🔐 Verifikasi")
+#
+# Pembagian kerja yang disepakati desain Fase 0: LABEL HANYA DITENTUKAN
+# MANUSIA. Model ensemble sudah menilai tiap laporan saat masuk (skor,
+# band, sinyal) dan di tab ini tampil sebagai SARAN — bukan keputusan.
+# Memakai model sebagai penentu label akan merusak tujuan korpus: data
+# latih baru harus berisi penilaian manusia yang independen, bukan
+# pendapat model tentang datanya sendiri (apalagi kelemahan model yang
+# terdokumentasi justru pada pesan Indonesia).
+# ---------------------------------------------------------------------------
+LABELS = ["SMISHING", "SAH", "SPAM_PROMO"]
+CATEGORIES = ["blokir_akun", "otp_palsu", "resi_paket", "undian", "apk",
+              "investasi", "tagihan", "lainnya"]
+_STRONG = ("S1", "S2", "S3")
+
+_PROMO_WORDS = ("promo", "diskon", "cashback", "gratis ongkir", "sale",
+                "voucher", "bonus saldo")
+_CATEGORY_HINTS = [
+    ("resi_paket", ("paket", "resi", "antar ulang", "gudang", "kurir",
+                    "tertahan")),
+    ("blokir_akun", ("blokir", "diblokir", "dinonaktifkan",
+                     "verifikasi akun", "akan hangus")),
+    ("otp_palsu", ("otp", "kode verifikasi", "kode rahasia")),
+    ("undian", ("undian", "memenangkan", "hadiah", "selamat! anda",
+                "klaim")),
+    ("apk", (".apk", "unduh aplikasi", "install aplikasi")),
+    ("investasi", ("investasi", "profit", "grup vip", "trading",
+                   "modal kembali")),
+    ("tagihan", ("tagihan", "menunggak", "tunggakan", "pemutusan",
+                 "jatuh tempo")),
+]
+
+
+def _fired_list(row: dict) -> list:
+    try:
+        return json.loads(row.get("rules_fired") or "[]")
+    except (TypeError, ValueError):
+        return []
+
+
+def suggest_label(row: dict) -> tuple[str, str, str]:
+    """Saran label dari band/sinyal model. (label, alasan, kekuatan).
+
+    Ini SARAN triase untuk mempercepat review manusia — bukan vonis;
+    keputusan tetap di tangan peninjau. Kekuatan 'lemah' berarti zona
+    abu-abu: baca teksnya sebelum memutuskan.
+    """
+    band = row.get("model_band")
+    fired = _fired_list(row)
+    strong = [s for s in fired if s in _STRONG]
+    if band == "ESKALASI" or len(strong) >= 2:
+        alasan = f"band {band}"
+        if strong:
+            alasan += f" + sinyal kuat {'+'.join(strong)}"
+        return "SMISHING", alasan, "kuat"
+    if band == "AMAN" and not strong:
+        return "SAH", "band AMAN, tanpa sinyal kuat", "kuat"
+    text = (row.get("text_scrubbed") or "").lower()
+    if any(w in text for w in _PROMO_WORDS):
+        return "SPAM_PROMO", "pola promosi pada zona abu-abu", "lemah"
+    return ("SMISHING",
+            "zona abu-abu (band REVIEW / satu sinyal) — baca teksnya",
+            "lemah")
+
+
+def suggest_category(row: dict) -> str:
+    text = (row.get("text_scrubbed") or "").lower()
+    for kategori, kata in _CATEGORY_HINTS:
+        if any(k in text for k in kata):
+            return kategori
+    return "lainnya"
+
+
+def fetch_pending(cfg: dict, limit: int = 50) -> list:
+    """Antrean verifikasi: skor tertinggi dulu (triase risiko)."""
+    return turso_execute(
+        cfg,
+        "SELECT * FROM reports WHERE status = 'pending' "
+        "ORDER BY model_score DESC, created_at ASC LIMIT ?",
+        [int(limit)])
+
+
+def fetch_verified(cfg: dict, limit: int = 20) -> list:
+    return turso_execute(
+        cfg,
+        "SELECT * FROM reports WHERE status = 'verified' "
+        "ORDER BY verified_at DESC LIMIT ?",
+        [int(limit)])
+
+
+def count_status(cfg: dict, status: str) -> int:
+    return turso_execute(
+        cfg, "SELECT COUNT(*) AS n FROM reports WHERE status = ?",
+        [status])[0]["n"]
+
+
+def corpus_count(cfg: dict) -> int:
+    return turso_execute(
+        cfg, "SELECT COUNT(*) AS n FROM corpus_export")[0]["n"]
+
+
+def sender_report_count(cfg: dict, sender_hash: str | None) -> int:
+    if not sender_hash:
+        return 0
+    return turso_execute(
+        cfg, "SELECT COUNT(*) AS n FROM reports WHERE sender_hash = ?",
+        [sender_hash])[0]["n"]
+
+
+def duplicate_text_count(cfg: dict, text: str, exclude_id: int) -> int:
+    return turso_execute(
+        cfg, "SELECT COUNT(*) AS n FROM reports "
+             "WHERE text_scrubbed = ? AND id <> ?",
+        [text, int(exclude_id)])[0]["n"]
+
+
+def verify_report(cfg: dict, report_id: int, label: str, category: str,
+                  gallery_visible: bool) -> None:
+    turso_execute(
+        cfg,
+        "UPDATE reports SET status = 'verified', label = ?, "
+        "category_modus = ?, gallery_visible = ?, "
+        "verified_at = datetime('now') WHERE id = ? AND status = 'pending'",
+        [label, category, 1 if gallery_visible else 0, int(report_id)])
+
+
+def reject_report(cfg: dict, report_id: int) -> None:
+    turso_execute(
+        cfg,
+        "UPDATE reports SET status = 'rejected', "
+        "verified_at = datetime('now') WHERE id = ? AND status = 'pending'",
+        [int(report_id)])
+
+
+def delete_report(cfg: dict, report_id: int) -> None:
+    """Hapus lunak (hak hapus): baris keluar dari galeri & korpus."""
+    turso_execute(
+        cfg,
+        "UPDATE reports SET status = 'deleted', gallery_visible = 0 "
+        "WHERE id = ?",
+        [int(report_id)])
+
+
+def unverify_report(cfg: dict, report_id: int) -> None:
+    turso_execute(
+        cfg,
+        "UPDATE reports SET status = 'pending', label = NULL, "
+        "verified_at = NULL, gallery_visible = 0 "
+        "WHERE id = ? AND status = 'verified'",
+        [int(report_id)])
+
+
+def set_gallery_visible(cfg: dict, report_id: int, visible: bool) -> None:
+    turso_execute(
+        cfg,
+        "UPDATE reports SET gallery_visible = ? "
+        "WHERE id = ? AND status = 'verified'",
+        [1 if visible else 0, int(report_id)])
+
+
+def _report_meta(cfg: dict, r: dict) -> str:
+    parts = [
+        f"kanal {CHANNELS.get(r['channel'], r['channel'])}",
+        f"submit {fmt_wita(r['created_at'])}",
+        "consent data: YA" if r["consent_data_use"]
+        else "consent data: tidak",
+    ]
+    if r.get("sender_hash"):
+        n = sender_report_count(cfg, r["sender_hash"])
+        parts.append(f"pengirim {r['sender_hash'][:8]}… "
+                     f"({n} laporan dari pengirim ini)")
+    dup = duplicate_text_count(cfg, r["text_scrubbed"], r["id"])
+    if dup:
+        parts.append(f"⚠️ teks identik dengan {dup} laporan lain")
+    return " · ".join(parts)
+
+
+def render_admin_tab() -> None:
+    st.markdown("### 🔐 Verifikasi Laporan")
+    st.markdown(
+        "Ruang kerja peninjau. **Label ditentukan manusia** — model "
+        "hanya memberi saran dari skor & sinyalnya agar review cepat. "
+        "Laporan terverifikasi + consent masuk korpus data latih; yang "
+        "ditandai tampil galeri muncul di Galeri Modus publik.")
+    cfg = load_config()
+    if not (cfg.get("url") and cfg.get("token")):
+        st.warning("Basis data belum terhubung pada deployment ini.")
+        return
+    if not cfg.get("admin_password"):
+        st.info(
+            "Tab verifikasi belum diaktifkan: secret "
+            "`SISKAMLING_ADMIN_PASSWORD` belum dipasang di Streamlit "
+            "Cloud. Pasang dulu, lalu reboot app.")
+        return
+    if not st.session_state.get("sk_admin_ok"):
+        pw = st.text_input("Kata sandi verifikasi", type="password",
+                           key="sk_admin_pw")
+        if st.button("🔓 Masuk", key="btn_admin_login"):
+            if hmac.compare_digest(pw or "", cfg["admin_password"]):
+                st.session_state["sk_admin_ok"] = True
+                st.rerun()
+            else:
+                st.error("Kata sandi salah.")
+        return
+    if st.button("🔒 Kunci lagi", key="btn_admin_logout"):
+        st.session_state["sk_admin_ok"] = False
+        st.rerun()
+
+    try:
+        n_pending = count_status(cfg, "pending")
+        n_verified = count_status(cfg, "verified")
+        n_corpus = corpus_count(cfg)
+        pending = fetch_pending(cfg)
+        verified = fetch_verified(cfg)
+    except Exception as exc:
+        st.error(f"Antrean belum bisa dimuat: {exc}")
+        return
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Menunggu verifikasi", n_pending)
+    m2.metric("Sudah terverifikasi", n_verified)
+    m3.metric("Baris korpus (corpus_export)", n_corpus)
+
+    st.markdown("#### Antrean pending — risiko tertinggi di atas")
+    if not pending:
+        st.info("Antrean kosong. Tidak ada laporan menunggu verifikasi.")
+    for r in pending:
+        sug_label, sug_reason, sug_strength = suggest_label(r)
+        sug_cat = suggest_category(r)
+        badge = BAND_BADGE.get(r["model_band"], r["model_band"] or "-")
+        fired = _fired_list(r)
+        with st.container(border=True):
+            st.markdown(
+                f"**Laporan #{r['id']}** · {badge} · skor "
+                f"**{r['model_score']:.3f}**"
+                + (f" · sinyal: {'+'.join(fired)}" if fired else ""))
+            st.markdown(f"> {r['text_scrubbed']}")
+            st.caption(_report_meta(cfg, r))
+            st.caption(
+                f"🤖 Saran mesin ({sug_strength}): **{sug_label}** · "
+                f"kategori **{sug_cat}** — {sug_reason}. Keputusan "
+                f"tetap di tanganmu.")
+            c1, c2, c3 = st.columns([2, 2, 1])
+            label = c1.selectbox(
+                "Label", LABELS, index=LABELS.index(sug_label),
+                key=f"adm_label_{r['id']}")
+            category = c2.selectbox(
+                "Kategori modus", CATEGORIES,
+                index=CATEGORIES.index(sug_cat),
+                key=f"adm_cat_{r['id']}")
+            gallery = c3.checkbox(
+                "Tampil di galeri", value=False,
+                key=f"adm_gal_{r['id']}")
+            b1, b2, b3 = st.columns(3)
+            if b1.button("✅ Verifikasi", type="primary",
+                         key=f"adm_verify_{r['id']}"):
+                verify_report(cfg, r["id"], label, category, gallery)
+                st.success(f"Laporan #{r['id']} terverifikasi sebagai "
+                           f"{label}.")
+                st.rerun()
+            if b2.button("❌ Tolak", key=f"adm_reject_{r['id']}"):
+                reject_report(cfg, r["id"])
+                st.success(f"Laporan #{r['id']} ditolak.")
+                st.rerun()
+            if b3.button("🗑️ Hapus", key=f"adm_delete_{r['id']}"):
+                delete_report(cfg, r["id"])
+                st.success(f"Laporan #{r['id']} dihapus (status "
+                           f"deleted).")
+                st.rerun()
+
+    st.markdown("#### Terverifikasi terakhir")
+    if not verified:
+        st.caption("Belum ada laporan terverifikasi.")
+    for r in verified:
+        with st.container(border=True):
+            gal = "tampil di galeri" if r["gallery_visible"] \
+                else "tidak tampil di galeri"
+            st.markdown(
+                f"**#{r['id']}** · **{r['label']}** · "
+                f"modus *{r['category_modus'] or '-'}* · {gal} · "
+                f"diverifikasi {fmt_wita(r['verified_at'])}")
+            st.markdown(f"> {r['text_scrubbed']}")
+            b1, b2, b3 = st.columns(3)
+            if r["gallery_visible"]:
+                if b1.button("🙈 Sembunyikan dari galeri",
+                             key=f"adm_hide_{r['id']}"):
+                    set_gallery_visible(cfg, r["id"], False)
+                    st.rerun()
+            else:
+                if b1.button("👁️ Tampilkan di galeri",
+                             key=f"adm_show_{r['id']}"):
+                    set_gallery_visible(cfg, r["id"], True)
+                    st.rerun()
+            if b2.button("↩️ Kembalikan ke antrean",
+                         key=f"adm_unverify_{r['id']}"):
+                unverify_report(cfg, r["id"])
+                st.rerun()
+            if b3.button("🗑️ Hapus", key=f"adm_vdelete_{r['id']}"):
+                delete_report(cfg, r["id"])
+                st.rerun()
