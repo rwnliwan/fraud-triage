@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.3.2.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.3.3.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,13 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v5.3.3 (ikon bantuan "?"): label jargon kini ditemani ikon ?
+dengan tooltip CSS satu-dua kalimat (hover desktop, sentuh/fokus di
+HP) — empat statistik sidebar (t_close, t_esc, PR-AUC test, mesin
+fp32) dan label skor P(scam) terkalibrasi; panel sinyal teks mendapat
+baris penjelas S1–S3 vs penenang. Slider simulator sudah punya help
+bawaan Streamlit. Murni app.py — termuat tanpa reboot.
 
 Baru di v5.3.2 (paket responsif CSS): media query <=640px/<=480px —
 padding konten dikencangkan dan font metrik/judul diturunkan
@@ -113,7 +120,7 @@ from triage_core import TriageEngine, ZONES
 from rules import apply_rules_and_calm, _SIGNAL_NAMES
 from journey import render_journey
 
-APP_VERSION = "v5.3.2"
+APP_VERSION = "v5.3.3"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -226,6 +233,29 @@ footer {visibility: hidden;}
 .ft-side-stat strong {
   color: #f2f5fb; font-size: 0.98rem; line-height: 1.35;
 }
+/* Ikon bantuan "?" + tooltip (v5.3.3): lingkaran kecil di samping label
+   jargon; penjelasan satu-dua kalimat muncul saat hover (desktop) atau
+   fokus/sentuh (keyboard & HP). Murni CSS — tanpa JavaScript. */
+.ft-help {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 0.95rem; height: 0.95rem; border-radius: 999px;
+  border: 1px solid #54678c; color: #9fb2d0; background: transparent;
+  font-size: 0.62rem; font-weight: 700; line-height: 1;
+  margin-left: 0.32rem; cursor: help; position: relative;
+  vertical-align: 0.14em; text-transform: none; letter-spacing: 0;
+}
+.ft-help .ft-tip {
+  display: none; position: absolute; z-index: 80;
+  bottom: calc(100% + 0.45rem); left: 50%; transform: translateX(-50%);
+  width: 13.5rem; max-width: 72vw; white-space: normal;
+  background: #101b31; border: 1px solid #3b5280; border-radius: 9px;
+  padding: 0.55rem 0.65rem;
+  color: #dbe4f3; font-size: 0.74rem; font-weight: 500;
+  line-height: 1.45; text-transform: none; letter-spacing: 0;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+}
+.ft-help:hover .ft-tip, .ft-help:focus .ft-tip,
+.ft-help:active .ft-tip { display: block; }
 .ft-side-note {
   color: #c6d0e4; font-size: 0.84rem; line-height: 1.45;
   margin: 0.75rem 0 0 0;
@@ -663,6 +693,17 @@ def verdict_sentence(analysis, t_close, t_esc):
             f"berkala).")
 
 
+def help_icon(tip):
+    """Ikon "?" kecil dengan tooltip CSS (lihat .ft-help di blok gaya).
+
+    Dipakai di samping label jargon (t_close, PR-AUC, dst.) agar pembaca
+    awam tidak perlu menebak artinya. Teks tip tampil apa adanya —
+    hindari karakter " di dalamnya.
+    """
+    return (f'<span class="ft-help" tabindex="0">?'
+            f'<span class="ft-tip">{tip}</span></span>')
+
+
 def result_card_html(analysis, t_close, t_esc):
     res, rule, zone = analysis["res"], analysis["rule"], analysis["final_zone"]
     name, icon, color = ZONE_DISPLAY[zone]
@@ -693,7 +734,7 @@ def result_card_html(analysis, t_close, t_esc):
   <div class="ft-band">{icon} {name}
     <span class="ft-zone-key">— {ZONES[zone]["label_id"]}</span></div>
   <div class="ft-score">{res["p_scam"]:.3f}
-    <small>P(scam) terkalibrasi</small></div>
+    <small>P(scam) terkalibrasi {help_icon('Peluang pesan ini smishing menurut model, sudah dikalibrasi: skor 0,42 berarti kira-kira 42 dari 100 pesan serupa benar-benar smishing pada data kalibrasi. Skor ini mengurutkan antrean triase — bukan vonis akhir.')}</small></div>
   <div class="ft-desc">{ZONES[zone]["desc_id"]}</div>
   <div class="ft-verdict">{verdict}</div>
   {model_band}{badge}
@@ -702,7 +743,10 @@ def result_card_html(analysis, t_close, t_esc):
 
 def signal_panel_md(rule):
     sig = rule["signals"]
-    lines = ["#### 🛰️ Panel sinyal teks"]
+    lines = ["#### 🛰️ Panel sinyal teks",
+             "_Petunjuk tekstual dari lapisan aturan (terpisah dari skor "
+             "model). Sinyal kuat S1–S3 adalah pola khas smishing; sinyal "
+             "penenang menandai pola pesan resmi._"]
     for it in sig["items"]:
         mark = "✅" if it["detected"] else "▫️"
         detail = f" — {it['detail']}" if it["detected"] and it["detail"] \
@@ -772,16 +816,16 @@ with st.sidebar:
           <div class="ft-side-status">● CHOSEN · app {APP_VERSION}</div>
           <div class="ft-side-stats">
             <div class="ft-side-stat">
-              <small>t_close</small><strong>{engine.t_close:.3f}</strong>
+              <small>t_close {help_icon('Ambang tutup otomatis: skor P(scam) di bawah nilai ini masuk AUTO-CLOSE — pesan dianggap sah tanpa eskalasi. Sengaja disetel sangat rendah supaya smishing hampir mustahil ikut tertutup.')}</small><strong>{engine.t_close:.3f}</strong>
             </div>
             <div class="ft-side-stat">
-              <small>t_esc</small><strong>{engine.t_esc:.3f}</strong>
+              <small>t_esc {help_icon('Ambang eskalasi: skor P(scam) di atas nilai ini masuk ESKALASI prioritas tinggi. Pada data validation, zona di atas ambang ini presisinya 90% atau lebih.')}</small><strong>{engine.t_esc:.3f}</strong>
             </div>
             <div class="ft-side-stat">
-              <small>PR-AUC test</small><strong>0,986</strong>
+              <small>PR-AUC test {help_icon('Ukuran ketepatan perangkingan model pada data uji (skala 0 sampai 1, makin tinggi makin baik). 0,986 dicapai pada data uji Inggris UCI. Angka ini menilai kualitas urutan skor, bukan akurasi vonis per pesan.')}</small><strong>0,986</strong>
             </div>
             <div class="ft-side-stat">
-              <small>Mesin</small><strong>fp32</strong>
+              <small>Mesin {help_icon('Model dijalankan pada presisi penuh fp32 (floating point 32-bit), bukan hasil kuantisasi atau kompresi — skor yang tampil identik dengan saat model dievaluasi.')}</small><strong>fp32</strong>
             </div>
           </div>
           <p class="ft-side-note">Skor adalah <b>perangkingan triase</b>
