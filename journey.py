@@ -130,9 +130,11 @@ def _flow_html(stages):
     return '<div class="jr-flow">' + panah.join(boxes) + "</div>"
 
 
-def _heatmap_chart(rows):
+def _heatmap_chart(rows, grup=None):
     """Heatmap Altair: % lolos per kategori, Tahap 2C vs 2D.
 
+    grup=None -> satu chart semua kategori. grup="SAH"/"SMISHING" ->
+    chart khusus grup itu (dipakai pemanggil untuk dua chart terpisah).
     Mengembalikan chart Altair, atau None bila altair tak tersedia /
     data kosong — pemanggil menampilkan tabel sebagai cadangan.
     """
@@ -146,6 +148,10 @@ def _heatmap_chart(rows):
     # Altair 6 menolak list-of-dicts mentah sebagai `data` (harus
     # DataFrame / Mapping) — bungkus jadi DataFrame lebih dulu.
     data = pd.DataFrame([dict(r, teks=_fmt_pct(r["lolos"])) for r in rows])
+    if grup is not None and "grup" in data.columns:
+        data = data[data["grup"] == grup]
+        if data.empty:
+            return None
     label_order = list(dict.fromkeys(data["label"]))
     base = alt.Chart(data).encode(
         x=alt.X("tahap:N", title=None,
@@ -167,19 +173,11 @@ def _heatmap_chart(rows):
         color=alt.condition(alt.datum.lolos >= 65,
                             alt.value("#0b1220"), alt.value("#f8fafc")))
     layered = rect + text
-    # v5.2.2: SAH dan SMISHING jadi dua panel facet terpisah (header
-    # grup di atas tiap panel) dengan label kategori PENDEK — di v5.1
-    # label "GRUP · nama_kategori" terpotong di layar sempit.
-    if "grup" in data.columns:
-        return layered.properties(height=235).facet(
-            row=alt.Row(
-                "grup:N", title=None, sort=["SAH", "SMISHING"],
-                header=alt.Header(labelFontSize=12,
-                                  labelFontWeight="bold",
-                                  labelPadding=6)),
-            columns=1,
-        ).resolve_scale(y="independent")
-    return layered.properties(height=560)
+    # v5.3.1: facet Altair ternyata menyusutkan lebar chart di layar
+    # sempit (sel terdesak, teks persen bertumpuk — terlihat di HP).
+    # Grup kini dirender sebagai DUA CHART TERPISAH oleh pemanggil;
+    # tiap chart tunggal melebar penuh seperti v5.1 yang terbukti.
+    return layered.properties(height=300 if grup else 560)
 
 
 def _bars_html(stages, gates):
@@ -246,11 +244,23 @@ def render_journey():
                       help=f"Gerbang ≥ {_fmt_auc(gates['uci_pr_auc'])}")
 
     st.markdown("#### Peta kategori — Tahap 2C vs 2D (full-stack)")
-    chart = _heatmap_chart(data.get("kategori_heatmap", []))
-    if chart is not None:
-        st.altair_chart(chart, use_container_width=True)
+    hm_rows = data.get("kategori_heatmap", [])
+    if hm_rows and "grup" in hm_rows[0]:
+        # Dua chart terpisah per grup (v5.3.1) — lihat _heatmap_chart.
+        for grup in ("SAH", "SMISHING"):
+            st.markdown(f"**{grup}**")
+            chart = _heatmap_chart(hm_rows, grup=grup)
+            if chart is not None:
+                st.altair_chart(chart, use_container_width=True)
+            else:
+                st.dataframe([r for r in hm_rows
+                              if r.get("grup") == grup])
     else:
-        st.dataframe(data.get("kategori_heatmap", []))
+        chart = _heatmap_chart(hm_rows)
+        if chart is not None:
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.dataframe(hm_rows)
     st.caption(
         "Warna = persen pesan lolos per kategori (15 pesan per kategori). "
         "Bandingkan kolom 2C → 2D: kategori yang ditargetkan data 2D "

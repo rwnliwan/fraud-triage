@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.3.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.3.1.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,11 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v5.3.1 (patch heatmap): facet Altair v5.2.2 terbukti
+menyusutkan lebar heatmap di layar sempit (sel terdesak, teks persen
+bertumpuk di HP) — grup SAH/SMISHING kini dirender sebagai dua chart
+terpisah yang melebar penuh, bukan facet.
 
 Baru di v5.3 (P1 — antrean batch kerja analis): hasil Mode Batch kini
 ditampilkan sebagai ANTREAN PRIORITAS terurut skor tertinggi (cara
@@ -102,7 +107,7 @@ from triage_core import TriageEngine, ZONES
 from rules import apply_rules_and_calm, _SIGNAL_NAMES
 from journey import render_journey
 
-APP_VERSION = "v5.3"
+APP_VERSION = "v5.3.1"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
