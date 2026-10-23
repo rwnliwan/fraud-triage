@@ -4,6 +4,30 @@
 · Model: [Hugging Face `rwnliwan/fraud-triage-smishing`](https://huggingface.co/rwnliwan/fraud-triage-smishing)
 · Notebook proyek: `fraud-triage-laya-vs-ml-dl.ipynb` (arsip riset lengkap Tahap 0–2D)
 
+## 🏘️ Siskamling Digital — layanan publik (live)
+
+Sejak Oktober 2026 app ini juga adalah rumah **Siskamling Digital**,
+layanan publik **lapor & cek smishing** untuk warga Indonesia —
+tab pertama yang menyambut pengunjung:
+
+- **📮 Lapor & Cek** — tempel pesan mencurigakan → vonis bahasa awam
+  (🔴 hampir pasti penipuan / 🟡 mencurigakan / 🟢 kemungkinan aman)
+  + langkah tindakan; laporkan agar warga lain terlindungi. Teks
+  dibersihkan otomatis dari data pribadi sebelum disimpan; pengirim
+  hanya disimpan sebagai hash satu arah.
+- **🖼️ Galeri Modus** — modus terverifikasi yang bisa disaring per
+  kategori, untuk mengenali pola sebelum jadi korban.
+- **🔐 Verifikasi** (admin, gerbang kata sandi) — label akhir selalu
+  diputuskan **manusia**; model hanya menyaring & memberi saran.
+  Panel analitik + progres korpus menuju retrain di tab yang sama.
+- **Perlindungan layanan** — batas laju per pengirim/harian, pemutus
+  antrean, kill switch intake, deteksi duplikat, monitor lonjakan,
+  dan Cloudflare Turnstile terpasang dorman (aktif saat dibutuhkan).
+
+Misi datanya: membangun **korpus smishing Bahasa Indonesia berlabel
+manusia** — riset proyek ini menemukan belum ada korpus publik
+semacam itu. Detail fase & desainnya ada di riwayat commit (v5.5–v5.9).
+
 ## 🎬 Demo
 
 ![Demo Fraud Triage](docs/demo.gif)
@@ -34,9 +58,11 @@ drift. Uraian lengkapnya ada di laporan PDF proyek.
 Aplikasi penyaji model terpilih proyek **Fraud Triage**: **Ensemble (Top-3
 Terkalibrasi)** dengan kebijakan dua ambang operasional **t_close = 0,010**
 dan **t_esc = 0,135** (Bagian 10 notebook `fraud-triage-laya-vs-ml-dl.ipynb`).
-Empat tab: **Analisis Tunggal**, **Mode Batch**, **Evaluasi ID** (panel 16
-pesan + simulator ambang interaktif), dan **Perjalanan Riset** (kronik
-Tahap 0–2D dengan heatmap per kategori). Sidebar ringkas: kartu status
+Tujuh tab (urutan warga-dulu sejak v5.9): **Lapor & Cek** dan
+**Galeri Modus** (Siskamling Digital, lihat di atas), lalu konsol
+riset: **Analisis Tunggal**, **Mode Batch**, **Evaluasi ID** (panel 16
+pesan + simulator ambang interaktif), **Perjalanan Riset** (kronik
+Tahap 0–2D dengan heatmap per kategori), dan **Verifikasi** (admin). Sidebar ringkas: kartu status
 model + dropdown "Lihat detail" (komposisi, aturan, keterbatasan,
 benchmark arena, tautan).
 
