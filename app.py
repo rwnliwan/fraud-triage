@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.6.0.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.7.0.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -15,6 +15,17 @@ Perlakuan / Model / Data & sumber (dataset + asal-usulnya). 2A/2B
 adalah tahap persiapan tanpa skor gerbang (kunci `persiapan` di
 results.json, aditif: journey.py lama mengabaikannya dengan aman).
 Tab ini termuat pada reboot berikutnya.
+
+Baru di v5.7.0 (SISKAMLING DIGITAL — Analitik): panel "📊 Analitik
+layanan" di dalam tab Verifikasi (siskamling.py, di bawah metrik
+kepala): total laporan, masuk 7 hari terakhir, pengirim unik &
+berulang, tingkat consent, rata-rata waktu verifikasi, corong status,
+progres korpus corpus_export per label menuju target ±1.000 (retrain
+Tahap 3), grafik laporan per hari (14 hari), distribusi band & kanal,
+dan kategori modus terverifikasi terbanyak. Semua dari tabel reports
+— jumlah views halaman SENGAJA tidak diklaim di sini (app tidak bisa
+menghitung penontonnya sendiri secara akurat; statistik penonton ada
+di dashboard Streamlit Cloud pemilik app).
 
 Baru di v5.6.0 (SISKAMLING DIGITAL — Fase 2): tab ketujuh
 "🔐 Verifikasi" — ruang kerja verifikasi admin di siskamling.py,
@@ -167,7 +178,7 @@ from journey import render_journey
 from siskamling import render_lapor_tab, render_gallery_tab, \
     render_admin_tab
 
-APP_VERSION = "v5.6.0"
+APP_VERSION = "v5.7.0"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV

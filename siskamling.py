@@ -559,6 +559,121 @@ def set_gallery_visible(cfg: dict, report_id: int, visible: bool) -> None:
         [1 if visible else 0, int(report_id)])
 
 
+def analytics_snapshot(cfg: dict) -> dict:
+    """Agregat analitik layanan dari tabel reports + corpus_export.
+
+    Semua angka berasal dari data laporan sendiri (akurat, bukan
+    perkiraan). Jumlah *views* halaman TIDAK bisa dihitung dari dalam
+    app — itu ranah statistik Streamlit Cloud milik pemilik app, atau
+    penghitung sesi terpisah (tidak dipasang: menghitung bot & kunjungan
+    sendiri, jadi menyesatkan bila dibaca sebagai penonton).
+    """
+    snap = {}
+    snap["total"] = turso_execute(
+        cfg, "SELECT COUNT(*) AS n FROM reports")[0]["n"]
+    snap["last7"] = turso_execute(
+        cfg, "SELECT COUNT(*) AS n FROM reports "
+             "WHERE created_at >= datetime('now', '-7 days')")[0]["n"]
+    snap["status"] = {r["status"]: r["n"] for r in turso_execute(
+        cfg, "SELECT status, COUNT(*) AS n FROM reports GROUP BY status")}
+    snap["band"] = {r["model_band"]: r["n"] for r in turso_execute(
+        cfg, "SELECT model_band, COUNT(*) AS n FROM reports "
+             "GROUP BY model_band")}
+    snap["channel"] = {r["channel"]: r["n"] for r in turso_execute(
+        cfg, "SELECT channel, COUNT(*) AS n FROM reports "
+             "GROUP BY channel")}
+    row = turso_execute(
+        cfg, "SELECT AVG(consent_data_use) AS r FROM reports")[0]
+    snap["consent_rate"] = (row["r"] or 0.0) * 100.0
+    row = turso_execute(
+        cfg, "SELECT AVG((julianday(verified_at) - "
+             "julianday(created_at)) * 24.0) AS h FROM reports "
+             "WHERE verified_at IS NOT NULL")[0]
+    snap["avg_verify_hours"] = row["h"]
+    snap["corpus_by_label"] = {r["label"]: r["n"] for r in turso_execute(
+        cfg, "SELECT label, COUNT(*) AS n FROM corpus_export "
+             "GROUP BY label")}
+    snap["top_categories"] = turso_execute(
+        cfg, "SELECT category_modus AS k, COUNT(*) AS n FROM reports "
+             "WHERE status = 'verified' AND category_modus IS NOT NULL "
+             "GROUP BY category_modus ORDER BY n DESC LIMIT 8")
+    daily = {r["d"]: r["n"] for r in turso_execute(
+        cfg, "SELECT date(created_at) AS d, COUNT(*) AS n FROM reports "
+             "WHERE created_at >= datetime('now', '-14 days') "
+             "GROUP BY date(created_at)")}
+    today = datetime.now(timezone.utc).date()
+    snap["daily14"] = [
+        ((today - timedelta(days=i)).isoformat(),
+         daily.get((today - timedelta(days=i)).isoformat(), 0))
+        for i in range(13, -1, -1)]
+    snap["unique_senders"] = turso_execute(
+        cfg, "SELECT COUNT(DISTINCT sender_hash) AS n FROM reports "
+             "WHERE sender_hash IS NOT NULL")[0]["n"]
+    snap["repeat_senders"] = turso_execute(
+        cfg, "SELECT COUNT(*) AS n FROM (SELECT sender_hash FROM reports "
+             "WHERE sender_hash IS NOT NULL GROUP BY sender_hash "
+             "HAVING COUNT(*) > 1)")[0]["n"]
+    return snap
+
+
+def _render_analytics(cfg: dict) -> None:
+    """Panel 📊 Analitik di tab Verifikasi (data laporan, bukan views)."""
+    st.markdown("#### 📊 Analitik layanan")
+    try:
+        s = analytics_snapshot(cfg)
+    except Exception as exc:
+        st.caption(f"Analitik belum bisa dimuat: {exc}")
+        return
+    if not s["total"]:
+        st.caption("Belum ada data — analitik terisi begitu laporan "
+                   "warga mulai masuk.")
+        return
+    a1, a2, a3, a4 = st.columns(4)
+    a1.metric("Total laporan masuk", s["total"])
+    a2.metric("Masuk 7 hari terakhir", s["last7"])
+    a3.metric("Pengirim unik", s["unique_senders"],
+              help="Jumlah sender_hash berbeda. Pengirim berulang "
+                   f"(>1 laporan): {s['repeat_senders']}.")
+    a4.metric("Tingkat consent data", f"{s['consent_rate']:.0f}%",
+              help="Persen pelapor yang menyetujui laporannya dipakai "
+                   "untuk galeri anonim + data latih.")
+    if s["avg_verify_hours"] is not None:
+        st.caption(f"Rata-rata waktu verifikasi: "
+                   f"{s['avg_verify_hours']:.1f} jam sejak submit.")
+    st.caption("Corong status: " + " · ".join(
+        f"{k} {v}" for k, v in sorted(s["status"].items())))
+    corpus_total = sum(s["corpus_by_label"].values())
+    st.progress(min(corpus_total / 1000.0, 1.0),
+                text=f"Korpus berlabel+consent: {corpus_total} / target "
+                     f"±1.000 untuk retrain Tahap 3 ("
+                     + ", ".join(f"{k} {v}" for k, v in
+                                 sorted(s["corpus_by_label"].items()))
+                     + ")")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.caption("Laporan per hari (14 hari terakhir)")
+        st.bar_chart({"Tanggal": [d for d, _ in s["daily14"]],
+                      "Laporan": [n for _, n in s["daily14"]]},
+                     x="Tanggal", y="Laporan")
+        st.caption("Distribusi band model: " + " · ".join(
+            f"{k} {v}" for k, v in sorted(s["band"].items())))
+    with c2:
+        st.caption("Kanal: " + " · ".join(
+            f"{CHANNELS.get(k, k)} {v}"
+            for k, v in sorted(s["channel"].items())))
+        if s["top_categories"]:
+            st.caption("Kategori modus terverifikasi terbanyak:")
+            st.bar_chart(
+                {"Kategori": [r["k"] for r in s["top_categories"]],
+                 "Jumlah": [r["n"] for r in s["top_categories"]]},
+                x="Kategori", y="Jumlah")
+    st.caption(
+        "Catatan: jumlah *views* halaman tidak tampil di sini — app "
+        "tidak bisa menghitung penontonnya sendiri secara akurat. "
+        "Statistik penonton ada di dashboard Streamlit Cloud pemilik "
+        "app; panel ini khusus data laporan yang terverifikasi.")
+
+
 def _report_meta(cfg: dict, r: dict) -> str:
     parts = [
         f"kanal {CHANNELS.get(r['channel'], r['channel'])}",
@@ -620,6 +735,7 @@ def render_admin_tab() -> None:
     m1.metric("Menunggu verifikasi", n_pending)
     m2.metric("Sudah terverifikasi", n_verified)
     m3.metric("Baris korpus (corpus_export)", n_corpus)
+    _render_analytics(cfg)
 
     st.markdown("#### Antrean pending — risiko tertinggi di atas")
     if not pending:

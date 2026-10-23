@@ -113,7 +113,12 @@ untuk pesan penipuan — dengan mesin Fraud Triage yang sama:
   selalu ditentukan manusia**, agar korpus berisi penilaian yang
   independen dari model. Dari sini laporan diverifikasi (masuk korpus
   bila ada consent; opsional tampil di galeri), ditolak, dihapus, atau
-  dikembalikan ke antrean.
+  dikembalikan ke antrean. Panel **📊 Analitik** di tab yang sama
+  (v5.7.0) menampilkan total & tren laporan harian, corong status,
+  tingkat consent, pengirim unik/berulang, rata-rata waktu verifikasi,
+  progres korpus per label menuju target ±1.000 (retrain Tahap 3), dan
+  kategori modus terbanyak — semua dari data laporan, **bukan** jumlah
+  views halaman (app tidak dapat menghitung penontonnya sendiri).
 
 Konfigurasi deploy (Streamlit Cloud → Settings → Secrets — nilai
 **tidak pernah** masuk repo/git): `TURSO_DATABASE_URL`,
