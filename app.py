@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.7.0.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.8.0.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -15,6 +15,19 @@ Perlakuan / Model / Data & sumber (dataset + asal-usulnya). 2A/2B
 adalah tahap persiapan tanpa skor gerbang (kunci `persiapan` di
 results.json, aditif: journey.py lama mengabaikannya dengan aman).
 Tab ini termuat pada reboot berikutnya.
+
+Baru di v5.8.0 (SISKAMLING DIGITAL — Fase 2.5 Hardening): pertahanan
+formulir publik tanpa dependensi luar (siskamling.py + migrasi DB
+migrate_fase25.py). Kill switch intake di tabel app_config
+(intake_open): ditutup -> warga hanya bisa cek, laporan tidak
+tersimpan; dapat dibalik dari tab Verifikasi atau langsung di basis
+data sebagai jalur darurat. Batas laju: maks 10 laporan per pengirim
+(sender_hash) per hari, maks 300 laporan per hari, pemutus antrean
+saat pending >= 500, dan jeda 20 detik antar-kirim per sesi. Kolom
+baru reports.text_hash (sidik teks ter-scrub ternormalisasi) untuk
+deteksi duplikat lintas variasi penulisan di kartu verifikasi.
+CAPTCHA Turnstile SENGAJA belum dipasang — eskalasi bila serangan
+sungguhan muncul.
 
 Baru di v5.7.0 (SISKAMLING DIGITAL — Analitik): panel "📊 Analitik
 layanan" di dalam tab Verifikasi (siskamling.py, di bawah metrik
@@ -178,7 +191,7 @@ from journey import render_journey
 from siskamling import render_lapor_tab, render_gallery_tab, \
     render_admin_tab
 
-APP_VERSION = "v5.7.0"
+APP_VERSION = "v5.8.0"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV

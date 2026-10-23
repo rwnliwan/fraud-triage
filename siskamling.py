@@ -32,6 +32,8 @@ import hashlib
 import hmac
 import json
 import os
+import re
+import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -196,6 +198,68 @@ def turso_execute(cfg: dict, sql: str, args: list | None = None) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Hardening (Fase 2.5) — batas laju, kill switch, sidik teks
+#
+# Pertahanan berlapis untuk formulir publik, tanpa dependensi luar:
+#   * Kill switch intake di tabel app_config (kunci 'intake_open'):
+#     ditutup -> warga hanya bisa cek, laporan tidak tersimpan. Bisa
+#     dibalik dari tab Verifikasi ATAU langsung di basis data (jalur
+#     darurat via pengelola), tanpa deploy ulang.
+#   * Batas laju: per pengirim (sender_hash) per hari, total laporan
+#     per hari, dan pemutus antrean (pending menumpuk -> intake jeda).
+#     Jeda antar-kirim per sesi memperlambat klik beruntun.
+#   * text_hash: sidik teks ter-scrub ternormalisasi (huruf kecil,
+#     spasi dirapikan) untuk deteksi duplikat lintas variasi penulisan.
+# CAPTCHA (Turnstile) SENGAJA belum dipasang: eskalasi bila serangan
+# sungguhan muncul, agar formulir warga tetap mulus selama aman.
+# ---------------------------------------------------------------------------
+MAX_PER_SENDER_PER_DAY = 10
+MAX_REPORTS_PER_DAY = 300
+MAX_PENDING_OPEN = 500
+SESSION_COOLDOWN_SEC = 20
+
+
+def normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def text_hash_of(text: str) -> str:
+    return hashlib.sha256(normalize_text(text).encode("utf-8")).hexdigest()
+
+
+def intake_open(cfg: dict) -> bool:
+    """Baca kill switch; gagal baca / belum ada baris = TERBUKA."""
+    try:
+        rows = turso_execute(
+            cfg, "SELECT value FROM app_config WHERE key = 'intake_open'")
+        return (not rows) or rows[0]["value"] != "0"
+    except Exception:
+        return True
+
+
+def set_intake_open(cfg: dict, open_: bool) -> None:
+    turso_execute(
+        cfg,
+        "INSERT INTO app_config (key, value) VALUES ('intake_open', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        ["1" if open_ else "0"])
+
+
+def sender_today_count(cfg: dict, sender_hash: str | None) -> int:
+    if not sender_hash:
+        return 0
+    return turso_execute(
+        cfg, "SELECT COUNT(*) AS n FROM reports WHERE sender_hash = ? "
+             "AND created_at >= date('now')", [sender_hash])[0]["n"]
+
+
+def reports_today_count(cfg: dict) -> int:
+    return turso_execute(
+        cfg, "SELECT COUNT(*) AS n FROM reports "
+             "WHERE created_at >= date('now')")[0]["n"]
+
+
+# ---------------------------------------------------------------------------
 # Operasi basis data
 # ---------------------------------------------------------------------------
 def submit_report(cfg: dict, *, channel: str, raw_text: str,
@@ -214,13 +278,13 @@ def submit_report(cfg: dict, *, channel: str, raw_text: str,
         cfg,
         "INSERT INTO reports (channel, text_scrubbed, model_score, "
         "model_band, rules_fired, consent_data_use, consent_at, "
-        "sender_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "sender_hash, text_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "RETURNING id, created_at",
         [channel, clean_text, float(score), BAND_STORE[band_final],
          json.dumps(rules_fired), 1 if consent_data_use else 0,
          datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
          if consent_data_use else None,
-         sender_hash])
+         sender_hash, text_hash_of(clean_text)])
     report_id = rows[0]["id"]
     created_at = rows[0]["created_at"]
     if consent_data_use:
@@ -289,6 +353,26 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
             "(kredensial basis data belum dipasang) — fitur **cek** "
             "tetap bisa dipakai, laporan belum bisa dikirim.")
 
+    # Hardening Fase 2.5: status kill switch + pemutus antrean.
+    intake_is_open = True
+    queue_full = False
+    if db_ready:
+        try:
+            intake_is_open = intake_open(cfg)
+            queue_full = count_status(cfg, "pending") >= MAX_PENDING_OPEN
+        except Exception:
+            intake_is_open, queue_full = True, False
+    if db_ready and not intake_is_open:
+        st.warning(
+            "⏸️ **Penerimaan laporan sedang ditutup sementara** oleh "
+            "pengelola. Fitur **cek tetap bisa dipakai** — hasil cek "
+            "tampil seperti biasa, hanya saja laporan tidak tersimpan.")
+    elif db_ready and queue_full:
+        st.warning(
+            "⏸️ **Antrean verifikasi sedang penuh** — perlindungan "
+            "anti-banjir aktif. Fitur cek tetap bisa dipakai; laporan "
+            "baru sementara tidak tersimpan.")
+
     channel_label = st.selectbox(
         "Kanal pesan", list(CHANNELS.values()), key="sk_channel")
     channel = [k for k, v in CHANNELS.items() if v == channel_label][0]
@@ -312,12 +396,42 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
         raw = (text or "").strip()
         if not raw:
             st.warning("Isi dulu teks pesannya.")
+        elif time.time() - st.session_state.get(
+                "sk_last_submit_ts", 0) < SESSION_COOLDOWN_SEC:
+            st.warning(
+                f"Baru saja mengirim — tunggu ±{SESSION_COOLDOWN_SEC} "
+                "detik sebelum mengirim lagi (perlindungan anti-banjir).")
         else:
+            # Gerbang simpan (hardening): kill switch, pemutus antrean,
+            # batas per pengirim & batas harian global. Hasil CEK tetap
+            # diberikan; yang ditahan hanya penyimpanannya.
+            sender_raw = (sender or "").strip() or None
+            can_store = db_ready and intake_is_open and not queue_full
+            block_reason = None
+            if db_ready and can_store:
+                try:
+                    s_hash = hash_sender(sender_raw, cfg.get("salt")) \
+                        if sender_raw else None
+                except Exception:
+                    s_hash = None
+                try:
+                    if s_hash and sender_today_count(
+                            cfg, s_hash) >= MAX_PER_SENDER_PER_DAY:
+                        can_store = False
+                        block_reason = (
+                            f"batas {MAX_PER_SENDER_PER_DAY} laporan "
+                            "per pengirim per hari tercapai")
+                    elif reports_today_count(cfg) >= MAX_REPORTS_PER_DAY:
+                        can_store = False
+                        block_reason = ("batas laporan harian layanan "
+                                         "tercapai")
+                except Exception:
+                    can_store = True  # gagal cek batas != blokir warga
             with st.spinner("Menilai pesan…"):
                 analysis = analyze_one(engine, raw)
             st.session_state["sk_last"] = analysis
             st.session_state["sk_receipt"] = None
-            if db_ready:
+            if can_store:
                 rule = analysis["rule"]
                 rules_fired = list(rule["active_signals"])
                 if rule.get("calm", {}).get("lowered"):
@@ -325,7 +439,7 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
                 try:
                     report_id, created_at = submit_report(
                         cfg, channel=channel, raw_text=raw,
-                        sender_raw=(sender or "").strip() or None,
+                        sender_raw=sender_raw,
                         consent_data_use=bool(consent),
                         score=analysis["res"]["p_scam"],
                         band_final=analysis["final_zone"],
@@ -333,8 +447,18 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
                     st.session_state["sk_receipt"] = {
                         "id": report_id, "created_at": created_at,
                         "consent": bool(consent)}
+                    st.session_state["sk_last_submit_ts"] = time.time()
                 except Exception as exc:
                     st.error(f"Laporan gagal tersimpan: {exc}")
+            elif db_ready:
+                st.info(
+                    "Hasil cek tampil di bawah, tetapi laporan ini "
+                    "**tidak tersimpan**: "
+                    + (block_reason
+                       or "penerimaan laporan sedang ditutup/"
+                          "antrean penuh")
+                    + " (perlindungan anti-banjir). Terima kasih — "
+                      "hasil ceknya tetap berlaku untukmu.")
 
     receipt = st.session_state.get("sk_receipt")
     if receipt:
@@ -508,11 +632,19 @@ def sender_report_count(cfg: dict, sender_hash: str | None) -> int:
         [sender_hash])[0]["n"]
 
 
-def duplicate_text_count(cfg: dict, text: str, exclude_id: int) -> int:
+def duplicate_text_count(cfg: dict, row: dict) -> int:
+    """Laporan lain dengan teks sama — via text_hash ternormalisasi
+    (tahan variasi huruf besar/spasi); baris lama tanpa hash memakai
+    pencocokan teks persis."""
+    if row.get("text_hash"):
+        return turso_execute(
+            cfg, "SELECT COUNT(*) AS n FROM reports "
+                 "WHERE text_hash = ? AND id <> ?",
+            [row["text_hash"], int(row["id"])])[0]["n"]
     return turso_execute(
         cfg, "SELECT COUNT(*) AS n FROM reports "
              "WHERE text_scrubbed = ? AND id <> ?",
-        [text, int(exclude_id)])[0]["n"]
+        [row["text_scrubbed"], int(row["id"])])[0]["n"]
 
 
 def verify_report(cfg: dict, report_id: int, label: str, category: str,
@@ -685,7 +817,7 @@ def _report_meta(cfg: dict, r: dict) -> str:
         n = sender_report_count(cfg, r["sender_hash"])
         parts.append(f"pengirim {r['sender_hash'][:8]}… "
                      f"({n} laporan dari pengirim ini)")
-    dup = duplicate_text_count(cfg, r["text_scrubbed"], r["id"])
+    dup = duplicate_text_count(cfg, r)
     if dup:
         parts.append(f"⚠️ teks identik dengan {dup} laporan lain")
     return " · ".join(parts)
@@ -735,6 +867,22 @@ def render_admin_tab() -> None:
     m1.metric("Menunggu verifikasi", n_pending)
     m2.metric("Sudah terverifikasi", n_verified)
     m3.metric("Baris korpus (corpus_export)", n_corpus)
+    # Kill switch intake (Fase 2.5) — juga bisa dibalik langsung di
+    # basis data oleh pengelola sebagai jalur darurat.
+    intake_now = intake_open(cfg)
+    ic1, ic2 = st.columns([3, 1])
+    ic1.caption(
+        "Penerimaan laporan (intake): **TERBUKA**" if intake_now
+        else "Penerimaan laporan (intake): **DITUTUP** — warga hanya "
+             "bisa cek, laporan tidak tersimpan.")
+    if intake_now:
+        if ic2.button("🔴 Tutup intake", key="btn_intake_close"):
+            set_intake_open(cfg, False)
+            st.rerun()
+    else:
+        if ic2.button("🟢 Buka intake", key="btn_intake_open"):
+            set_intake_open(cfg, True)
+            st.rerun()
     _render_analytics(cfg)
 
     st.markdown("#### Antrean pending — risiko tertinggi di atas")

@@ -119,6 +119,13 @@ untuk pesan penipuan — dengan mesin Fraud Triage yang sama:
   progres korpus per label menuju target ±1.000 (retrain Tahap 3), dan
   kategori modus terbanyak — semua dari data laporan, **bukan** jumlah
   views halaman (app tidak dapat menghitung penontonnya sendiri).
+  **Fase 2.5 Hardening** (v5.8.0): kill switch penerimaan laporan di
+  tabel `app_config` (tombol di tab Verifikasi; keadaan darurat juga
+  bisa dibalik langsung di basis data), batas laju 10 laporan per
+  pengirim per hari + 300 per hari + pemutus antrean pada 500 pending,
+  jeda 20 detik antar-kirim per sesi, dan kolom `text_hash` (sidik
+  teks ternormalisasi) untuk deteksi duplikat. Monitor lonjakan
+  (30 menit) dan ekspor cadangan mingguan berjalan di sisi pengelola.
 
 Konfigurasi deploy (Streamlit Cloud → Settings → Secrets — nilai
 **tidak pernah** masuk repo/git): `TURSO_DATABASE_URL`,
