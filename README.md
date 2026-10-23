@@ -4,6 +4,33 @@
 · Model: [Hugging Face `rwnliwan/fraud-triage-smishing`](https://huggingface.co/rwnliwan/fraud-triage-smishing)
 · Notebook proyek: `fraud-triage-laya-vs-ml-dl.ipynb` (arsip riset lengkap Tahap 0–2D)
 
+## 🎬 Demo
+
+![Demo Fraud Triage](docs/demo.gif)
+
+*Alur demo: contoh smishing → kartu ESKALASI + panel sinyal → Mode Batch
+(antrean prioritas) → Perjalanan Riset (alur 6 tahap + heatmap kategori).*
+
+| Analisis Tunggal | Mode Batch |
+|---|---|
+| ![Analisis Tunggal](docs/app-analisis-tunggal.png) | ![Mode Batch](docs/app-mode-batch.png) |
+
+| Perjalanan Riset | Heatmap kategori 2C vs 2D |
+|---|---|
+| ![Perjalanan Riset](docs/app-perjalanan-riset.png) | ![Heatmap](docs/app-heatmap.png) |
+
+## 🎯 Pemanfaatan model ini
+
+Pola yang bisa dipakai ulang hari ini adalah **mesin mengurutkan,
+manusia memutuskan**: skor terkalibrasi mengurutkan antrean triase
+pesan mencurigakan (bank/fintech, CS e-wallet/telco, pusat pengaduan),
+lapisan aturan deterministik menjaga kasus paling berbahaya, dan
+manusia tetap pemegang vonis. **Bobot modelnya sendiri belum siap
+produksi** — klaim Indonesianya gagal 2 dari 4 gerbang yang dikunci
+di muka dan data latihnya SMS Inggris ±2011; naik produksi butuh
+korpus Indonesia segar berlabel, kalibrasi ulang, dan pemantauan
+drift. Uraian lengkapnya ada di laporan PDF proyek.
+
 Aplikasi penyaji model terpilih proyek **Fraud Triage**: **Ensemble (Top-3
 Terkalibrasi)** dengan kebijakan dua ambang operasional **t_close = 0,010**
 dan **t_esc = 0,135** (Bagian 10 notebook `fraud-triage-laya-vs-ml-dl.ipynb`).
