@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.2.2.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.3.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,13 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v5.3 (P1 — antrean batch kerja analis): hasil Mode Batch kini
+ditampilkan sebagai ANTREAN PRIORITAS terurut skor tertinggi (cara
+analis menatap antrean triase sesungguhnya), lengkap dengan peringkat,
+pemilih detail per kasus (teks penuh, skor, band model vs final,
+sinyal aturan & penenang), dan tombol unduh LAPORAN PER KASUS (.md).
+CSV batch tetap tersedia dan kini ikut terurut prioritas.
 
 Baru di v5.2.2 (P0 — heatmap & benchmark sidebar): heatmap kategori
 di tab Perjalanan Riset kini memakai label PENDEK dan dua panel facet
@@ -92,10 +99,10 @@ import pandas as pd
 import streamlit as st
 
 from triage_core import TriageEngine, ZONES
-from rules import apply_rules_and_calm
+from rules import apply_rules_and_calm, _SIGNAL_NAMES
 from journey import render_journey
 
-APP_VERSION = "v5.2.2"
+APP_VERSION = "v5.3"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -494,6 +501,52 @@ def _export_csv(records, extra_key=None):
             row[extra_key[0]] = r[extra_key[1]]
         rows.append(row)
     return pd.DataFrame(rows).to_csv(index=False).encode("utf-8")
+
+
+def _case_report_md(rank, r, engine):
+    """Laporan per kasus (Markdown) untuk unduhan dari antrean batch — P1.
+
+    Semua angka diambil dari rekaman standar kasus itu sendiri; ambang
+    dibaca dari engine live, bukan diketik ulang.
+    """
+    nama_final, emoji_final, _ = ZONE_DISPLAY[r["zone_final"]]
+    if r["rule_triggered"]:
+        sig = "; ".join(
+            f"{s} ({_SIGNAL_NAMES.get(s, s)})" for s in r["signals"])
+        aturan = f"**TERPICU** — sinyal aktif: {sig}"
+    elif r["signals"]:
+        sig = "; ".join(
+            f"{s} ({_SIGNAL_NAMES.get(s, s)})" for s in r["signals"])
+        aturan = (f"tidak terpicu (hanya 1 sinyal kuat aktif: {sig}; "
+                  f"aturan butuh >= 2 sinyal bersamaan)")
+    else:
+        aturan = "tidak terpicu (tidak ada sinyal kuat aktif)"
+    if r.get("calm_applied"):
+        tenang = "**diterapkan** — " + "; ".join(r["calm_reasons"])
+    else:
+        tenang = "tidak diterapkan"
+    return (
+        f"# Laporan Kasus Triase — Peringkat #{rank}\n\n"
+        f"Dihasilkan dari Mode Batch Fraud Triage app {APP_VERSION} "
+        f"(model operasional: Ensemble Top-3 Terkalibrasi — CHOSEN).\n\n"
+        f"## Pesan\n\n> {r['text']}\n\n"
+        f"## Hasil\n\n"
+        f"- Skor model (probabilitas scam terkalibrasi): "
+        f"**{r['score']:.3f}**\n"
+        f"- Ambang kebijakan: t_close = {engine.t_close:.3f} · "
+        f"t_esc = {engine.t_esc:.3f}\n"
+        f"- Band model: **{r['zone_model']}**\n"
+        f"- Band final: **{r['zone_final']}** ({emoji_final} "
+        f"{nama_final})\n\n"
+        f"## Lapisan aturan\n\n"
+        f"- Aturan keamanan (>= 2 sinyal kuat): {aturan}\n"
+        f"- Sinyal penenang: {tenang}\n\n"
+        f"## Catatan\n\n"
+        f"Skor adalah perangkingan triase untuk antrean manusia, "
+        f"bukan vonis akhir. Model adalah artefak pembelajaran "
+        f"terpimpin (data latih utama SMS Inggris ±2011); pola "
+        f"smishing Indonesia modern berada di luar distribusi itu.\n"
+    )
 
 
 def _bar_position(p, t_close, t_esc):
@@ -1020,6 +1073,10 @@ with tab_batch:
                              text=f"Menilai {i + 1} dari {len(lines)} "
                                   f"pesan…")
             bar.empty()
+            # P1: antrean prioritas — skor tertinggi di atas, seperti
+            # antrean kerja analis. Urutan ini dipakai tabel, CSV,
+            # dan pemilih detail per kasus.
+            rows.sort(key=lambda r: r["score"], reverse=True)
             st.session_state["batch_rows"] = rows
 
     rows = st.session_state.get("batch_rows")
@@ -1035,7 +1092,9 @@ with tab_batch:
                   sum(1 for r in rows if r["rule_triggered"]))
         m5.metric("⬇️ Kena penenang",
                   sum(1 for r in rows if r.get("calm_applied")))
+        st.markdown("#### Antrean prioritas — skor tertinggi di atas")
         df_rows = pd.DataFrame([{
+            "#": i + 1,
             "Pesan": _short(r["text"], 60),
             "Skor": round(r["score"], 3),
             "Band model": r["zone_model"],
@@ -1044,12 +1103,59 @@ with tab_batch:
             if r["rule_triggered"] else "Tidak",
             "Penenang": ("Ya — " + "; ".join(r["calm_reasons"]))
             if r.get("calm_applied") else "Tidak",
-        } for r in rows])
+        } for i, r in enumerate(rows)])
         st.dataframe(df_rows, hide_index=True)
         st.download_button(
             "⬇️ Unduh hasil batch (CSV)", key="dl_batch",
             data=_export_csv(rows),
             file_name="fraud-triage-batch.csv", mime="text/csv")
+
+        # P1: detail per kasus + laporan .md yang bisa diunduh.
+        st.markdown("#### Detail kasus")
+        case_labels = [
+            f"#{i + 1} · {r['score']:.3f} · "
+            f"{ZONE_DISPLAY[r['zone_final']][0]} · "
+            f"{_short(r['text'], 48)}"
+            for i, r in enumerate(rows)
+        ]
+        pick = st.selectbox(
+            "Pilih kasus", case_labels, key="batch_case_pick")
+        idx = case_labels.index(pick)
+        r = rows[idx]
+        nama_final, emoji_final, _ = ZONE_DISPLAY[r["zone_final"]]
+        with st.container(border=True):
+            st.markdown(f"**Pesan lengkap**\n\n> {r['text']}")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Skor model", f"{r['score']:.3f}")
+            c2.metric("Band model", r["zone_model"])
+            c3.metric("Band final",
+                      f"{emoji_final} {nama_final}")
+            if r["rule_triggered"]:
+                st.markdown(
+                    "**Aturan keamanan: TERPICU** — sinyal aktif: "
+                    + "; ".join(
+                        f"{s} ({_SIGNAL_NAMES.get(s, s)})"
+                        for s in r["signals"]))
+            elif r["signals"]:
+                st.markdown(
+                    "**Aturan keamanan: tidak terpicu** — sinyal kuat "
+                    "aktif: " + "; ".join(
+                        f"{s} ({_SIGNAL_NAMES.get(s, s)})"
+                        for s in r["signals"])
+                    + " (aturan butuh >= 2 sinyal bersamaan).")
+            else:
+                st.markdown(
+                    "**Aturan keamanan: tidak terpicu** — tidak ada "
+                    "sinyal kuat aktif.")
+            if r.get("calm_applied"):
+                st.markdown(
+                    "**Sinyal penenang: diterapkan** — "
+                    + "; ".join(r["calm_reasons"]))
+            st.download_button(
+                "⬇️ Unduh laporan kasus (.md)", key="dl_case",
+                data=_case_report_md(idx + 1, r, engine),
+                file_name=f"kasus-{idx + 1:02d}.md",
+                mime="text/markdown")
 
 # ---------------------------------------------------------------------------
 # Tab 3 — panel evaluasi Indonesia (butir E)
