@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.3.3.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v5.3.4.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,14 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v5.3.4 (info tambahan hasil audit): glosarium kartu benchmark
+(PR-AUC / Recall@FPR1% / ECE) di caption arena; caption expander skor
+anggota menjelaskan skor mentah & temperatur; kunci baca +/- faktor
+teks; help bawaan pada metrik batch "Kena aturan"/"Kena penenang";
+definisi "full-stack" di tab Perjalanan Riset (journey.py — live pada
+reboot berikutnya). Audit juga mengonfirmasi bagian lain sudah cukup
+jelas (Evaluasi ID, simulator, dropdown komposisi/aturan/keterbatasan).
 
 Baru di v5.3.3 (ikon bantuan "?"): label jargon kini ditemani ikon ?
 dengan tooltip CSS satu-dua kalimat (hover desktop, sentuh/fokus di
@@ -120,7 +128,7 @@ from triage_core import TriageEngine, ZONES
 from rules import apply_rules_and_calm, _SIGNAL_NAMES
 from journey import render_journey
 
-APP_VERSION = "v5.3.3"
+APP_VERSION = "v5.3.4"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -915,7 +923,13 @@ with st.sidebar:
             ), unsafe_allow_html=True)
             st.caption(
                 "Arena test notebook Bagian 9 pada test set Inggris "
-                "(UCI). Model operasional = peringkat pertama.")
+                "(UCI). Model operasional = peringkat pertama. "
+                "Cara membaca angka di kartu: **PR-AUC** = ketepatan "
+                "perangkingan skor (0–1, makin tinggi makin baik); "
+                "**Recall@FPR1%** = dari semua smishing, persen yang "
+                "tertangkap saat alarm palsu dibatasi 1% dari pesan sah; "
+                "**ECE** = selisih rata-rata antara skor dan kenyataan "
+                "(makin kecil, makin jujur skornya sebagai peluang).")
     elif sidebar_detail == "Tautan & sumber":
         with st.container(border=True):
             st.link_button(
@@ -1011,7 +1025,12 @@ with tab_single:
                 st.dataframe(df_members, hide_index=True)
                 st.caption("Skor akhir = rata-rata skor terkalibrasi "
                            "ketiga anggota (temperatur ensemble 1,0 by "
-                           "design).")
+                           "design). **Skor mentah** = keluaran model "
+                           "sebelum kalibrasi. **Temperatur** = pengatur "
+                           "ketajaman kalibrasi (temperature scaling): "
+                           "skor mentah diskalakan ulang agar nilainya "
+                           "jujur dibaca sebagai peluang — temperatur "
+                           "di atas 1 menghaluskan skor yang ekstrem.")
         with col_sig:
             st.markdown(signal_panel_md(analysis["rule"]))
 
@@ -1044,6 +1063,11 @@ with tab_single:
                 st.rerun()
 
         st.subheader("Mengapa skornya begitu — faktor teks")
+        st.caption("Cara membaca angka di samping kata: tanda **+** "
+                   "mendorong skor naik (makin mencurigakan), tanda **−** "
+                   "menekan skor turun. Angka itu adalah bobot kata pada "
+                   "anggota Logistic Regression — salah satu dari tiga "
+                   "anggota ensemble.")
         fac = res["factors"]
         c1, c2 = st.columns(2)
         with c1:
@@ -1172,9 +1196,16 @@ with tab_batch:
         m2.metric("🟡 REVIEW ANALIS", counts["REVIEW ANALIS"])
         m3.metric("🔴 ESKALASI", counts["ESKALASI"])
         m4.metric("⬆️ Kena aturan",
-                  sum(1 for r in rows if r["rule_triggered"]))
+                  sum(1 for r in rows if r["rule_triggered"]),
+                  help="Jumlah pesan yang band finalnya dipaksa naik ke "
+                       "ESKALASI oleh lapisan aturan (≥ 2 sinyal kuat "
+                       "bersamaan), berapa pun skor modelnya.")
         m5.metric("⬇️ Kena penenang",
-                  sum(1 for r in rows if r.get("calm_applied")))
+                  sum(1 for r in rows if r.get("calm_applied")),
+                  help="Jumlah pesan yang band-nya diturunkan tepat satu "
+                       "tingkat oleh sinyal penenang (pola pesan resmi "
+                       "berformat jelas). Penenang tidak pernah "
+                       "menghasilkan AUTO-CLOSE.")
         st.markdown("#### Antrean prioritas — skor tertinggi di atas")
         df_rows = pd.DataFrame([{
             "#": i + 1,
