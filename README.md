@@ -3,6 +3,7 @@
 **Demo live: [fraud-triage-demo.streamlit.app](https://fraud-triage-demo.streamlit.app/)**
 · Model: [Hugging Face `rwnliwan/fraud-triage-smishing`](https://huggingface.co/rwnliwan/fraud-triage-smishing)
 · Notebook proyek: `fraud-triage-laya-vs-ml-dl.ipynb` (arsip riset lengkap Tahap 0–2D)
+· 📄 Dokumen proyek (edisi v2): [Laporan Lengkap Proyek (PDF)](docs/laporan-lengkap-proyek.pdf) · [Presentasi LinkedIn (PDF)](docs/presentasi-linkedin.pdf)
 
 ## 🏘️ Siskamling Digital — layanan publik (live)
 
