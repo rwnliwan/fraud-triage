@@ -311,9 +311,6 @@ st.markdown(
     label p, label span, label div { color: #E8EDF7 !important; background: #0B1120 !important; }
     input::placeholder, textarea::placeholder { color: #C7D2E0 !important; opacity: 1 !important; }
     [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] * { color: #C7D2E0 !important; }
-    div.stMarkdown p { color: #E8EDF7 !important; }
-    [data-testid="stAppViewContainer"] { background-color: #0B1120 !important; }
-    div.stMarkdown { background-color: #0B1120 !important; }
     [data-testid="stExpandSidebarButton"] {
       min-width: 48px !important; min-height: 48px !important;
     }
