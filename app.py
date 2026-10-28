@@ -306,8 +306,11 @@ st.markdown(
     .ft-footer, .ft-footer b {
       color: #E8EDF7 !important; background: #0B1120 !important;
     }
+    .ft-footer a { color: #E8EDF7 !important; }
     .ft-footer { padding: 0.4rem 0.6rem; border-radius: 8px; }
-    label p { color: #E8EDF7 !important; }
+    label p, label span, label div { color: #E8EDF7 !important; background: #0B1120 !important; }
+    input::placeholder, textarea::placeholder { color: #C7D2E0 !important; opacity: 1 !important; }
+    [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] * { color: #C7D2E0 !important; }
     [data-testid="stExpandSidebarButton"] {
       min-width: 48px !important; min-height: 48px !important;
     }
