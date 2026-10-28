@@ -1067,7 +1067,7 @@ def _render_track_expander(cfg: dict, db_ready: bool) -> None:
 
 
 def render_lapor_tab(engine, analyze_one, card_html) -> None:
-    st.markdown("### 📮 Lapor & Cek Pesan Mencurigakan")
+    st.markdown("## 📮 Lapor & Cek Pesan Mencurigakan")
     st.markdown(
         "Tempel pesan yang Anda terima — sistem memberi **hasil cek "
         "awal** dari model pendeteksi yang sama dengan tab Analisis "

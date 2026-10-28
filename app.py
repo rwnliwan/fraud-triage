@@ -286,6 +286,17 @@ st.set_page_config(page_title="Siskamling Digital — Lapor & Cek Smishing",
                    page_icon="🛡️", layout="wide",
                    initial_sidebar_state="collapsed")
 
+# PageSpeed (ACC 28 Okt 2026): preconnect origin komponen Turnstile +
+# meta description. API Streamlit tak menyediakan meta description; meta di
+# body tetap terbaca audit Lighthouse yang memindai seluruh dokumen.
+st.markdown(
+    '<link rel="preconnect" href="https://siskamling-ts.rwnliwan.workers.dev">'
+    '<meta name="description" content="Siskamling Digital — laporkan dan cek '
+    "pesan mencurigakan (smishing). Layanan publik berbasis laporan warga, "
+    'diverifikasi manusia, bukan AI menilai AI.">',
+    unsafe_allow_html=True,
+)
+
 # ---------------------------------------------------------------------------
 # Gaya: tema "fraud ops console" (pelengkap .streamlit/config.toml)
 # ---------------------------------------------------------------------------
