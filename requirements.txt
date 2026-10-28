@@ -4,7 +4,11 @@
 # di Streamlit Cloud tidak kegemukan.
 --extra-index-url https://download.pytorch.org/whl/cpu
 
-streamlit>=1.37
+# PIN EKSKAK 2026-10-28 (pengaman kontras caption): versi live terverifikasi
+# dari log build Cloud (streamlit==1.66.1). JANGAN longgarkan ke >= :
+# kelas emotion caption (1uh2wvk) bisa berubah bila Streamlit naik versi,
+# dan aturan kontras caption di app.py bergantung pada kelas itu.
+streamlit==1.66.1
 scikit-learn>=1.5,<2
 scipy>=1.13
 numpy>=1.26
