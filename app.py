@@ -311,6 +311,12 @@ st.markdown(
     label p, label span, label div { color: #E8EDF7 !important; background: #0B1120 !important; }
     input::placeholder, textarea::placeholder { color: #C7D2E0 !important; opacity: 1 !important; }
     [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] * { color: #C7D2E0 !important; }
+    /* Caption st.caption (putaran 6): wadah caption Streamlit tidak punya
+       testid di versi ini; kelas emotion 1uh2wvk stabil lintas deploy
+       (terlihat sama di PSI 13:23 & 15:15) tapi BISA berubah bila Streamlit
+       upgrade — bila caption gagal lagi di PSI, cek ulang kelasnya. Pasangan
+       warna+latar mandiri seperti footer: lolos di tema gelap maupun terang. */
+    div.st-emotion-cache-1uh2wvk p { color: #E8EDF7 !important; background-color: #0B1120 !important; }
     [data-testid="stExpandSidebarButton"] {
       min-width: 48px !important; min-height: 48px !important;
     }
