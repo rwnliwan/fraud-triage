@@ -297,6 +297,31 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# PageSpeed (ACC 28 Okt 2026, paket kontras + target sentuh): warna eksplisit
+# pasangan depan/belakang + tinggi target minimum 48px untuk elemen yang
+# gagal di audit Lighthouse. Latar footer dibuat eksplisit agar pasangan
+# kontrasnya tidak bergantung pada tema (teks #E8EDF7 di #0B1120 ≈ 15:1).
+st.markdown(
+    """<style>
+    .ft-footer, .ft-footer b {
+      color: #E8EDF7 !important; background: #0B1120 !important;
+    }
+    .ft-footer { padding: 0.4rem 0.6rem; border-radius: 8px; }
+    label p { color: #E8EDF7 !important; }
+    [data-testid="stExpandSidebarButton"] {
+      min-width: 48px !important; min-height: 48px !important;
+    }
+    div[data-testid="stSelectbox"], div[data-testid="stSelectbox"] input {
+      min-height: 48px !important;
+    }
+    input[aria-label="Nomor pengirim pesan (opsional)"] {
+      min-height: 48px !important;
+    }
+    summary { min-height: 48px !important; }
+    </style>""",
+    unsafe_allow_html=True,
+)
+
 # ---------------------------------------------------------------------------
 # Gaya: tema "fraud ops console" (pelengkap .streamlit/config.toml)
 # ---------------------------------------------------------------------------
