@@ -293,7 +293,9 @@ st.markdown(
     '<link rel="preconnect" href="https://siskamling-ts.rwnliwan.workers.dev">'
     '<meta name="description" content="Siskamling Digital — laporkan dan cek '
     "pesan mencurigakan (smishing). Layanan publik berbasis laporan warga, "
-    'diverifikasi manusia, bukan AI menilai AI.">',
+    'diverifikasi manusia, bukan AI menilai AI.">'
+    '<meta name="author" content="Septian Panjaya">'
+    '<link rel="author" href="https://www.linkedin.com/in/septian-panjaya">',
     unsafe_allow_html=True,
 )
 
