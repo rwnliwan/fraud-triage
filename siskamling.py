@@ -34,6 +34,29 @@ label_log (jejak audit label) + tinjauan kedua buta atas sampel acak
 terverifikasi — yang cocok masuk hitungan "disepakati dua peninjau"
 (tampil di Analitik); yang berbeda menunggu adjudikasi peninjau utama.
 
+Baru di v6.1.6 (perbaikan review ronde 8 Terra — fail-open intake
+ditutup, adjudikasi berefek korpus, lacak berkode acak; model/skor/
+ambang TIDAK berubah): (1) Scrubber: TIDAK ADA LAGI allowlist TLD —
+TLD apa pun + fragment `#` + IPv4 ikut terscrub; aturan yang sama
+di rules.py (S1). (2) Adjudikasi "diragukan" MENGELUARKAN baris dari
+korpus (kolom corpus_excluded, migrasi 0002); emas mensyaratkan
+tidak ada sengketa terbuka; tinjauan berbeda yang baru membuka lagi
+antrean; putusan tercatat terverifikasi + di kolom putusan sendiri.
+(3) Panel Analitik: distribusi band model hanya atas laporan
+TERVERIFIKASI (pending tidak lagi bocor lewat agregat); caption
+panel ditulis apa adanya. (4) Consent atomik: INSERT reports +
+consent_log dalam SATU transaksi batch pipeline; view korpus kini
+mensyaratkan bukti consent_log. (5) Token Turnstile diverifikasi
+ulang TIAP pengiriman (tanpa cache sesi); widget di-reset tiap
+submit sukses. (6) Intake gagal-ke-tertutup: kill switch/batas/hash
+yang gagal dibaca TIDAK LAGI membuka simpan; gerbang simpan murni
+(check_storage_gate) yang bisa diuji. (7) Batas harian memakai hari
+WITA (bukan UTC). (8) Lacak laporan pakai KODE ACAK 8 karakter
+(bukan nomor urut). (9) OCR membawa penanda provenance (via_ocr).
+(10) Penjaga "jangan" S2 hanya menekan bila "jangan" mengikat verba
+permintaan itu. (11) Migrasi SQL berversi di repo (migrations/).
+Skema baru butuh migrasi 0002 di Turso live + reboot app.
+
 Baru di v6.1.5 (perbaikan review ronde 7 Terra — independensi
 pelabelan dikunci teknis, bukan prosedural; model/skor/ambang TIDAK
 berubah): (1) Scrubber: query URL tanpa path ("https://host?token=x")
@@ -104,6 +127,7 @@ import io
 import json
 import os
 import re
+import secrets
 import time
 import urllib.parse
 import urllib.request
@@ -142,9 +166,11 @@ CONSENT_TEXT_V1 = (
     "untuk proses cek dan verifikasi — tidak tampil di galeri dan tidak "
     "dipakai sebagai data latih.\n\n"
     "**Hak Anda:** Anda boleh meminta laporan Anda dihapus kapan saja; "
-    "penghapusan juga mengeluarkannya dari galeri dan dari data latih "
-    "turunan. Persetujuan ini sukarela — menolak tidak menghalangi Anda "
-    "memakai fitur cek pesan.\n\n"
+    "penghapusan mengeluarkannya dari galeri dan dari data latih yang "
+    "dibuat sesudah penghapusan — salinan yang sudah diekspor atau "
+    "sudah dipakai melatih model sebelum penghapusan tidak dapat "
+    "ditarik kembali. Persetujuan ini sukarela — menolak tidak "
+    "menghalangi Anda memakai fitur cek pesan.\n\n"
     "**Penting — batas layanan ini:** hasil cek adalah triase awal, "
     "bukan vonis dan bukan jaminan sebuah pesan aman atau penipuan. "
     "Jangan pernah membagikan kode OTP, PIN, atau kata sandi kepada "
@@ -156,8 +182,9 @@ CONSENT_TEXT_V1 = (
 
 CONSENT_CHECKBOX_V1 = (
     "Saya setuju isi pesan yang saya laporkan (setelah dibersihkan "
-    "dari data pribadi) ditampilkan tanpa nama di galeri modus dan "
-    "dipakai sebagai data latih untuk meningkatkan pendeteksi penipuan."
+    "dari data pribadi yang terdeteksi) ditampilkan tanpa nama di "
+    "galeri modus dan dipakai sebagai data latih untuk meningkatkan "
+    "pendeteksi penipuan."
 )
 
 
@@ -216,7 +243,10 @@ PRIVACY_TEXT_V1 = (
     "**Lokasi penyimpanan:** basis data layanan berada di **Tokyo, "
     "Jepang** (layanan basis data Turso) — artinya isi laporan "
     "tersimpan di luar Indonesia. Isinya sudah dibersihkan dari data "
-    "pribadi yang terdeteksi dan tidak memuat identitas Anda. Salinan "
+    "pribadi yang terdeteksi; pembersih otomatis bisa luput — nama "
+    "bebas, kode OTP, dan deret digit panjang sengaja tidak dihapus "
+    "(lihat 'Batas pembersihan otomatis' di bawah) — jadi jangan "
+    "menganggap teks tersimpan pasti bebas identitas. Salinan "
     "cadangan berkala disimpan maksimal **8 minggu** untuk keamanan "
     "data.\n\n"
     "**Berapa lama disimpan (retensi):** laporan disimpan selama "
@@ -224,13 +254,15 @@ PRIVACY_TEXT_V1 = (
     "keputusan pengelola; saat ini **belum ada penghapusan otomatis "
     "berdasarkan umur laporan**.\n\n"
     "**Hak Anda:** (1) mengetahui status laporan Anda — gunakan "
-    "fitur **🔎 Lacak laporan saya** dengan nomor laporan Anda; "
-    "(2) meminta laporan Anda **dihapus** — sampaikan nomor laporan "
+    "fitur **🔎 Lacak laporan saya** dengan kode lacak Anda; "
+    "(2) meminta laporan Anda **dihapus** — sampaikan kode lacak "
     "Anda kepada pengelola layanan. Laporan yang dihapus tidak "
-    "tampil di galeri dan tidak pernah masuk data latih. Jujur soal "
-    "mekaniknya: penghapusan saat ini berupa **penandaan status** di "
-    "basis data; penghapusan fisik permanen adalah penyempurnaan "
-    "yang masih kami kerjakan.\n\n"
+    "tampil di galeri dan tidak dipakai dalam data latih yang dibuat "
+    "sesudah penghapusan; salinan yang sudah diekspor atau sudah "
+    "dipakai melatih model sebelum penghapusan tidak dapat ditarik "
+    "kembali. Jujur soal mekaniknya: penghapusan saat ini berupa "
+    "**penandaan status** di basis data; penghapusan fisik permanen "
+    "adalah penyempurnaan yang masih kami kerjakan.\n\n"
     "**Batas pembersihan otomatis:** pembersih bekerja dengan pola "
     "(regex) dan bisa luput pada nama atau alamat yang tertulis "
     "bebas di dalam teks. Jangan menambahkan data pribadi Anda "
@@ -314,13 +346,7 @@ def turso_execute(cfg: dict, sql: str, args: list | None = None) -> list:
         base += "/v2/pipeline"
     stmt = {"sql": sql}
     if args:
-        stmt["args"] = [
-            {"type": "null", "value": None} if a is None
-            else {"type": "integer", "value": str(a)} if isinstance(a, int)
-            else {"type": "float", "value": a} if isinstance(a, float)
-            else {"type": "text", "value": str(a)}
-            for a in args
-        ]
+        stmt["args"] = [_stmt_arg(a) for a in args]
     body = json.dumps(
         {"requests": [{"type": "execute", "stmt": stmt}]}).encode("utf-8")
     req = urllib.request.Request(
@@ -351,6 +377,132 @@ def turso_execute(cfg: dict, sql: str, args: list | None = None) -> list:
     return rows
 
 
+def _stmt_arg(a):
+    """Satu nilai Python -> argumen statement pipeline Hrana."""
+    if a is None:
+        return {"type": "null", "value": None}
+    if isinstance(a, int):
+        return {"type": "integer", "value": str(a)}
+    if isinstance(a, float):
+        return {"type": "float", "value": a}
+    return {"type": "text", "value": str(a)}
+
+
+def _rows_of(result: dict) -> list:
+    """Hasil execute mentah pipeline -> list[dict]."""
+    cols = [c["name"] for c in result["cols"]]
+    rows = []
+    for row in result["rows"]:
+        d = {}
+        for c, cell in zip(cols, row):
+            t, v = cell.get("type"), cell.get("value")
+            if v is None or t == "null":
+                d[c] = None
+            elif t == "integer":
+                d[c] = int(v)
+            elif t == "float":
+                d[c] = float(v)
+            else:
+                d[c] = v
+        rows.append(d)
+    return rows
+
+
+def turso_batch(cfg: dict, statements: list) -> list:
+    """Jalankan beberapa statement dalam SATU transaksi pipeline.
+
+    statements: list[(sql, args)]. Kembalikan list hasil per langkah
+    (list[dict] untuk SELECT/RETURNING, [] untuk tulis). Bila SATU
+    langkah gagal, SELURUH batch dibatalkan (semantik transaksi batch
+    Hrana: step_errors terisi, step_results langkah itu null) — fungsi
+    ini melempar RuntimeError dan pemanggil WAJIB menganggap TIDAK ADA
+    langkah yang tersimpan.
+
+    Bentuk wire + error SUDAH diverifikasi ke Turso live (baca-saja,
+    2026-11-09): request {"type": "batch", "batch": {"steps": [...]}},
+    respons result {"step_results": [...], "step_errors": [...]}.
+    Yang BELUM bisa dibuktikan tanpa tulis live adalah rollback-nya
+    atas tulis yang gagal di tengah batch — verifikasi live: submit
+    pertama berkonsen pasca-deploy WAJIB dicek di DB (baris reports +
+    baris consent_log sama-sama ada); kegagalan consent_log yang
+    meninggalkan yatim = batch TIDAK atomik (laporkan, jangan diam).
+    """
+    base = cfg["url"].rstrip("/")
+    if base.startswith("libsql://"):
+        base = "https://" + base[len("libsql://"):]
+    elif base.startswith("http://"):
+        base = "https://" + base[len("http://"):]
+    if not base.endswith("/v2/pipeline"):
+        base += "/v2/pipeline"
+    steps = [{"stmt": {"sql": sql,
+                       "args": [_stmt_arg(a) for a in (args or [])]}}
+             for sql, args in statements]
+    body = json.dumps(
+        {"requests": [{"type": "batch", "batch": {"steps": steps}}]}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        base, data=body, method="POST",
+        headers={"Authorization": "Bearer " + cfg["token"],
+                 "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        res = json.loads(resp.read().decode("utf-8"))
+    item = res["results"][0]
+    if item["type"] != "ok":
+        raise RuntimeError("turso error: " + json.dumps(item)[:300])
+    result = item["response"]["result"]
+    errors = result.get("step_errors") or []
+    for i, err in enumerate(errors):
+        if err:
+            raise RuntimeError(
+                f"turso batch step {i} gagal: "
+                + json.dumps(err)[:300])
+    out = []
+    for step in result.get("step_results") or []:
+        out.append([] if step is None else _rows_of(step))
+    return out
+
+
+# Deteksi skema migrasi 0002 (Ronde 8): kode v6.1.6 menurun grasi bila
+# kolom baru belum ada (intake tidak boleh mati karena urutan deploy),
+# TETAPI perilaku yang efeknya bergantung pada kolom itu gagal JUJUR
+# (bukan diam-diam) — lihat pemakaiannya di submit_report /
+# adjudicate_report. Hasil probe di-cache per URL selama proses
+# berjalan; sesudah migrasi 0002 diterapkan, REBOOT app agar cache
+# ini tersegarkan (alasan reboot kedua, selain modul impor).
+_R8_COLS_CACHE: dict = {}
+
+
+def _reports_has_r8_cols(cfg: dict) -> bool:
+    """True bila migrasi 0002 sudah diterapkan (kolom track_code ada)."""
+    key = cfg.get("url") or ""
+    if key in _R8_COLS_CACHE:
+        return _R8_COLS_CACHE[key]
+    try:
+        turso_execute(
+            cfg,
+            "SELECT track_code, via_ocr, corpus_excluded "
+            "FROM reports LIMIT 0")
+        ok = True
+    except Exception:
+        ok = False
+    _R8_COLS_CACHE[key] = ok
+    return ok
+
+
+def _label_log_has_putusan(cfg: dict) -> bool:
+    """True bila kolom label_log.putusan (migrasi 0002) sudah ada."""
+    key = "putusan:" + (cfg.get("url") or "")
+    if key in _R8_COLS_CACHE:
+        return _R8_COLS_CACHE[key]
+    try:
+        turso_execute(cfg, "SELECT putusan FROM label_log LIMIT 0")
+        ok = True
+    except Exception:
+        ok = False
+    _R8_COLS_CACHE[key] = ok
+    return ok
+
+
 # ---------------------------------------------------------------------------
 # Hardening (Fase 2.5) — batas laju, kill switch, sidik teks
 #
@@ -371,6 +523,18 @@ MAX_PER_SENDER_PER_DAY = 10
 MAX_REPORTS_PER_DAY = 300
 MAX_PENDING_OPEN = 500
 SESSION_COOLDOWN_SEC = 20
+# Ronde 8, S5: batas per sesi — satu sesi browser (satu tab) boleh
+# mengirim maks 10 laporan; sesi baru = hitungan baru, jadi ini
+# HANYA hambatan kecepatan, bukan tembok. Kontrol anti-banjir yang
+# sesungguhnya adalah Turnstile per-pengiriman (M5, token sekali
+# pakai diverifikasi ulang tiap submit) + batas global 300/hari.
+# Angka 300 vs 500 sengaja berbeda: 300 adalah batas intake harian
+# (laporan BARU per hari), 500 adalah pemutus antrean (backlog boleh
+# menumpuk lintas hari bila verifikasi lebih lambat dari intake) —
+# antrean tidak pernah menjadi pengaman utama bila batas global
+# dipatuhi, dan itu dinyatakan di sini supaya tidak "diselaraskan"
+# tanpa alasan.
+MAX_SUBMITS_PER_SESSION = 10
 
 
 def normalize_text(text: str) -> str:
@@ -434,7 +598,14 @@ def set_turnstile_on(cfg: dict, on: bool) -> None:
 
 
 def verify_turnstile(cfg: dict, token) -> bool:
-    """Verifikasi token Turnstile ke Cloudflare siteverify (server-side)."""
+    """Verifikasi token Turnstile ke Cloudflare siteverify (server-side).
+
+    `remoteip` TIDAK dikirim: app Streamlit tidak mengekspos IP klien
+    ke kode ini (tidak ada REMOTE_ADDR / X-Forwarded-For yang bisa
+    dibaca dari sini) — dan parameter itu opsional di API Cloudflare
+    (Ronde 8, N5). Bila suatu hari IP tersedia lewat header proxy,
+    kirimkan di sini.
+    """
     if not token:
         return False
     data = urllib.parse.urlencode(
@@ -479,35 +650,49 @@ def _render_turnstile(cfg: dict):
         else:
             _ts_component = components.declare_component(
                 "siskamling_turnstile", url=_ts_url)
+    # Ronde 8, M5: kunci widget memakai nonce sesi — sesudah satu
+    # submit sukses, nonce naik (lihat render_lapor_tab) sehingga
+    # widget me-render ulang dan mengeluarkan token BARU untuk
+    # pengiriman berikutnya. Tanpa ini, widget mengembalikan token
+    # lama yang sama dan siteverify kedua akan gagal ("duplicate").
+    _nonce = st.session_state.get("sk_ts_nonce", 0)
     return _ts_component(sitekey=cfg.get("turnstile_site_key"),
-                         default=None, key="sk_turnstile")
+                         default=None, key=f"sk_turnstile_{_nonce}")
 
 
 def _turnstile_passed(cfg: dict, token) -> bool:
-    """Token lolos siteverify; token yang sama tidak diverifikasi ulang
-    dalam satu sesi (token Turnstile sekali pakai di sisi Cloudflare)."""
+    """Verifikasi token Turnstile ke Cloudflare siteverify.
+
+    Ronde 8, M5: token diverifikasi ulang pada setiap pengiriman —
+    TIDAK ADA LAGI cache sesi (`sk_ts_token` dihapus). Token
+    Turnstile sekali pakai di sisi Cloudflare: memakai token yang
+    sama untuk pengiriman kedua adalah reuse kredensial sekali pakai,
+    bukan "kenyamanan sesi". Kunci sesi lama yang tersisa dibersihkan
+    di sini sebagai higiene.
+    """
+    st.session_state.pop("sk_ts_token", None)
     if not token:
         return False
-    if st.session_state.get("sk_ts_token") == token:
-        return True
-    if verify_turnstile(cfg, token):
-        st.session_state["sk_ts_token"] = token
-        return True
-    return False
+    return verify_turnstile(cfg, token)
 
 
 def sender_today_count(cfg: dict, sender_hash: str | None) -> int:
+    # Ronde 8, S4: "hari ini" = hari WITA (UTC+8), konsisten dengan
+    # semua tampilan waktu app (fmt_wita, grafik harian R7 N3).
+    # date('now') lama memakai hari UTC yang berganti 07:00 WITA.
     if not sender_hash:
         return 0
     return turso_execute(
         cfg, "SELECT COUNT(*) AS n FROM reports WHERE sender_hash = ? "
-             "AND created_at >= date('now')", [sender_hash])[0]["n"]
+             "AND date(created_at, '+8 hours') "
+             ">= date('now', '+8 hours')", [sender_hash])[0]["n"]
 
 
 def reports_today_count(cfg: dict) -> int:
     return turso_execute(
         cfg, "SELECT COUNT(*) AS n FROM reports "
-             "WHERE created_at >= date('now')")[0]["n"]
+             "WHERE date(created_at, '+8 hours') "
+             ">= date('now', '+8 hours')")[0]["n"]
 
 
 # ---------------------------------------------------------------------------
@@ -530,12 +715,86 @@ MAX_ENRICH_DOMAINS = 3
 
 
 def same_text_today_count(cfg: dict, th: str | None) -> int:
-    """Berapa laporan dengan sidik teks sama sudah masuk HARI INI."""
+    """Berapa laporan dengan sidik teks sama sudah masuk HARI INI
+    (hari WITA — Ronde 8, S4)."""
     if not th:
         return 0
     return turso_execute(
         cfg, "SELECT COUNT(*) AS n FROM reports WHERE text_hash = ? "
-             "AND created_at >= date('now')", [th])[0]["n"]
+             "AND date(created_at, '+8 hours') "
+             ">= date('now', '+8 hours')", [th])[0]["n"]
+
+
+def check_storage_gate(cfg: dict, *, db_ready: bool,
+                       intake_open: bool, queue_full: bool,
+                       intake_unknown: bool = False,
+                       sender_raw: str | None = None,
+                       raw_text: str = "",
+                       session_submits: int = 0) -> tuple[bool, str | None]:
+    """Gerbang simpan murni (tanpa Streamlit) — Ronde 8, GG-16.
+
+    Kembalikan (can_store, block_reason). ATURAN KERAS: kegagalan
+    apa pun dalam pemeriksaan = TIDAK BOLEH SIMPAN (fail-closed).
+    Ronde 8 menutup tiga fail-open berlapis yang dulu membuka intake
+    tepat saat DB bermasalah: M6 (kill switch tak terbaca -> terbuka),
+    M7 (cek batas gagal -> can_store=True), M8 (hash gagal -> sender
+    diperlakukan anonim tanpa batas). Fungsi ini murni supaya gerbang
+    bisa diuji di guard QA tanpa browser (lihat qa_r8 GG-16).
+
+    Urutan: prasyarat -> sesi -> hash pengirim (gagal = tahan) ->
+    batas per-pengirim -> batas global -> batas teks-sama (gagal =
+    tahan — dulu `except: pass` membiarkan banjir duplikat lolos
+    saat ceknya gagal). Pengirim anonim (tanpa nomor) memang tidak
+    punya batas per-pengirim — penahannya batas global + Turnstile
+    per-pengiriman (M5) + batas sesi.
+    """
+    if not db_ready:
+        return False, "basis data belum terhubung"
+    if intake_unknown:
+        return False, ("status penerimaan laporan tidak dapat "
+                       "dipastikan — coba lagi nanti")
+    if not intake_open:
+        return False, "penerimaan laporan sedang ditutup"
+    if queue_full:
+        return False, "antrean verifikasi sedang penuh"
+    if session_submits >= MAX_SUBMITS_PER_SESSION:
+        return False, (f"batas {MAX_SUBMITS_PER_SESSION} laporan per "
+                       "sesi tercapai")
+    s_hash = None
+    if sender_raw:
+        try:
+            s_hash = hash_sender(sender_raw, cfg.get("salt"))
+        except Exception:
+            # M8: salt adalah prasyarat deployment, bukan kondisi
+            # normal — sender terisi tapi hash gagal = tahan simpan +
+            # beri tahu pengelola, JANGAN perlakukan sebagai anonim.
+            return False, ("tidak dapat memverifikasi nomor pengirim "
+                           "— coba lagi nanti")
+    try:
+        if s_hash and sender_today_count(
+                cfg, s_hash) >= MAX_PER_SENDER_PER_DAY:
+            return False, (f"batas {MAX_PER_SENDER_PER_DAY} laporan "
+                           "per pengirim per hari tercapai")
+        if reports_today_count(cfg) >= MAX_REPORTS_PER_DAY:
+            return False, "batas laporan harian layanan tercapai"
+    except Exception:
+        # M7: gagal cek batas != blokir warga DULU — kini dibalik:
+        # kuota yang tidak dapat diverifikasi = tahan simpan.
+        return False, ("pemeriksaan batas gagal — laporan tidak "
+                       "tersimpan sementara")
+    if raw_text:
+        try:
+            clean_preview, _f = scrub(raw_text)
+            if same_text_today_count(
+                    cfg, text_hash_of(clean_preview)) \
+                    >= MAX_SAME_TEXT_PER_DAY:
+                return False, ("pesan yang sama persis sudah "
+                               "dilaporkan 3 kali atau lebih hari "
+                               "ini — kami anggap duplikat berlebih")
+        except Exception:
+            return False, ("pemeriksaan duplikat gagal — laporan "
+                           "tidak tersimpan sementara")
+    return True, None
 
 
 # --- Pengayaan: umur domain via RDAP publik (tanpa kunci API) --------
@@ -668,36 +927,115 @@ def ocr_image_to_text(image_bytes: bytes) -> tuple[str, str]:
 
 
 # --- Lacak laporan (loop tertutup) ------------------------------------
+# Ronde 8, M9: lacak memakai KODE ACAK per laporan, BUKAN nomor urut.
+# Nomor urut (1, 2, 3, …) bisa ditebak siapa pun tanpa bukti
+# kepemilikan — label hasil pemeriksaan orang lain bisa dienumerasi.
+# Kode dibuat dari alfabet 32 karakter tanpa ambiguitas (tanpa 0/1/I/
+# L/O), 8 karakter = 40 bit; tebak acak praktis tidak mungkin, dan
+# kode TIDAK memberi akses ke isi laporan (hanya status + label).
+TRACK_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+TRACK_CODE_LEN = 8
+
+
+def new_track_code() -> str:
+    """Kode lacak acak baru (secrets — bukan random modul biasa)."""
+    return "".join(secrets.choice(TRACK_CODE_ALPHABET)
+                   for _ in range(TRACK_CODE_LEN))
+
+
 TRACK_LABEL_WARGA = {"SMISHING": "penipuan", "SAH": "bukan penipuan",
                      "SPAM_PROMO": "spam / promosi"}
 
 
-def fetch_report_status(cfg: dict, report_id: int):
-    """Status SATU laporan untuk fitur lacak warga. Yang diambil hanya
-    status, label, dan tanggal — teks pesan, hash, dan data lain TIDAK
-    pernah ikut, jadi tidak ada yang bisa bocor lewat nomor lacak."""
+def fetch_report_by_code(cfg: dict, track_code: str):
+    """Status SATU laporan untuk fitur lacak warga, dicari dengan KODE
+    LACAK acak. Yang diambil hanya status, label, dan tanggal — teks
+    pesan, hash, dan data lain TIDAK pernah ikut, jadi tidak ada yang
+    bisa bocor lewat kode lacak. Kode salah / kosong -> None."""
+    code = (track_code or "").strip().upper()
+    if not code:
+        return None
     rows = turso_execute(
         cfg,
         "SELECT status, label, created_at, verified_at FROM reports "
-        "WHERE id = ?", [int(report_id)])
+        "WHERE track_code = ?", [code])
     return rows[0] if rows else None
 
 
 # --- Jejak audit label + tinjauan kedua (label_log, migrasi v6.0) ------
 def _log_label(cfg: dict, report_id: int, aksi: str,
                label: str | None = None,
-               actor: str = "verifikator") -> None:
+               actor: str = "verifikator",
+               putusan: str | None = None) -> None:
     """Catat satu aksi label ke label_log. Gagal catat TIDAK boleh
     menggagalkan aksi verifikasinya sendiri (jejak bersifat audit,
-    bukan gerbang)."""
+    bukan gerbang) — KECUALI adjudikasi, yang memakai
+    _log_label_checked (Ronde 8, S1).
+
+    putusan (Ronde 8, S1): putusan adjudikasi ('pertahankan' /
+    'diragukan') ditulis di kolom `putusan` SENDIRI bila kolom itu
+    ada (migrasi 0002); kolom `label` tetap membawa putusan yang sama
+    demi kompatibilitas pembaca lama (semua pembaca memfilter aksi).
+    Bila kolom putusan belum ada (pra-migrasi), tulis tanpa kolom itu
+    — putusan tetap tercatat di `label`."""
     try:
-        turso_execute(
-            cfg,
-            "INSERT INTO label_log (report_id, aksi, label, actor) "
-            "VALUES (?, ?, ?, ?)",
-            [int(report_id), aksi, label, actor])
+        if putusan is not None and _label_log_has_putusan(cfg):
+            turso_execute(
+                cfg,
+                "INSERT INTO label_log (report_id, aksi, label, actor,"
+                " putusan) VALUES (?, ?, ?, ?, ?)",
+                [int(report_id), aksi, label, actor, putusan])
+        else:
+            turso_execute(
+                cfg,
+                "INSERT INTO label_log (report_id, aksi, label, actor) "
+                "VALUES (?, ?, ?, ?)",
+                [int(report_id), aksi, label, actor])
     except Exception:
         pass
+
+
+def _log_label_checked(cfg: dict, report_id: int, aksi: str,
+                       label: str | None = None,
+                       actor: str = "verifikator",
+                       putusan: str | None = None):
+    """Seperti _log_label, tetapi TERVERIFIKASI: kembalikan baris yang
+    tertulis (INSERT ... RETURNING id) atau None bila gagal. Dipakai
+    adjudikasi (Ronde 8, S1): sukses TIDAK BOLEH dilaporkan bila
+    putusannya tidak tersimpan."""
+    try:
+        if putusan is not None and _label_log_has_putusan(cfg):
+            rows = turso_execute(
+                cfg,
+                "INSERT INTO label_log (report_id, aksi, label, actor,"
+                " putusan) VALUES (?, ?, ?, ?, ?) RETURNING id",
+                [int(report_id), aksi, label, actor, putusan])
+        else:
+            rows = turso_execute(
+                cfg,
+                "INSERT INTO label_log (report_id, aksi, label, actor) "
+                "VALUES (?, ?, ?, ?) RETURNING id",
+                [int(report_id), aksi, label, actor])
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def _open_dispute_sql() -> str:
+    """Predikat SQL: ada tinjauan kedua yang BERBEDA dari label
+    tercatat dan BELUM diputus adjudikasi SESUDAH tinjauan itu.
+
+    Ronde 8, M2/S1: adjudikasi menutup sengketa HANYA sampai titik
+    putusannya (a.id > l.id) — tinjauan berbeda yang masuk BELAKANGAN
+    membuka lagi antrean. Predikat lama (NOT EXISTS adjudikasi apa
+    pun) menutup antrean selamanya sejak satu putusan, apa pun yang
+    terjadi sesudahnya."""
+    return (
+        "EXISTS (SELECT 1 FROM label_log l WHERE l.report_id = r.id "
+        "AND l.aksi = 'tinjauan_kedua' AND l.label <> r.label "
+        "AND NOT EXISTS (SELECT 1 FROM label_log a "
+        "WHERE a.report_id = r.id AND a.aksi = 'adjudikasi' "
+        "AND a.id > l.id))")
 
 
 def gold_count(cfg: dict) -> int:
@@ -705,14 +1043,23 @@ def gold_count(cfg: dict) -> int:
     kedua — ukuran KESEPAKATAN dua peninjau, BUKAN bukti label benar
     (Ronde 7, M4: label "subset emas / paling tepercaya" dulu melebihi
     yang diukur — bila kedua peninjau keliru sama, baris itu tetap
-    masuk hitungan)."""
+    masuk hitungan).
+
+    Ronde 8, M2: "disepakati" mensyaratkan TIDAK ADA sengketa
+    terbuka (satu tinjauan cocok + satu berbeda = BUKAN disepakati)
+    dan TIDAK ADA putusan 'diragukan' — label yang diragukan bukan
+    label yang disepakati, walau pernah ada tinjauan yang cocok."""
     try:
         return turso_execute(
             cfg,
             "SELECT COUNT(*) AS n FROM reports r "
             "WHERE r.status = 'verified' AND EXISTS ("
             "SELECT 1 FROM label_log l WHERE l.report_id = r.id "
-            "AND l.aksi = 'tinjauan_kedua' AND l.label = r.label)"
+            "AND l.aksi = 'tinjauan_kedua' AND l.label = r.label) "
+            "AND NOT " + _open_dispute_sql() + " "
+            "AND NOT EXISTS (SELECT 1 FROM label_log a "
+            "WHERE a.report_id = r.id AND a.aksi = 'adjudikasi' "
+            "AND a.label = 'diragukan')"
         )[0]["n"]
     except Exception:
         return 0
@@ -721,16 +1068,14 @@ def gold_count(cfg: dict) -> int:
 def disputed_count(cfg: dict) -> int:
     """Laporan terverifikasi yang tinjauan keduanya BERBEDA dari label
     tercatat dan BELUM diadjudikasi (Ronde 7, M4) — menunggu keputusan
-    peninjau utama; label korpus belum berubah sampai diputuskan."""
+    peninjau utama; label korpus belum berubah sampai diputuskan.
+    Ronde 8, S1: sengketa yang masuk sesudah adjudikasi terakhir
+    membuka lagi antrean (lihat _open_dispute_sql)."""
     try:
         return turso_execute(
             cfg,
             "SELECT COUNT(*) AS n FROM reports r "
-            "WHERE r.status = 'verified' AND EXISTS ("
-            "SELECT 1 FROM label_log l WHERE l.report_id = r.id "
-            "AND l.aksi = 'tinjauan_kedua' AND l.label <> r.label) "
-            "AND NOT EXISTS (SELECT 1 FROM label_log a "
-            "WHERE a.report_id = r.id AND a.aksi = 'adjudikasi')"
+            "WHERE r.status = 'verified' AND " + _open_dispute_sql()
         )[0]["n"]
     except Exception:
         return 0
@@ -738,16 +1083,12 @@ def disputed_count(cfg: dict) -> int:
 
 def fetch_disputed(cfg: dict, limit: int = 10) -> list:
     """Daftar laporan yang menunggu adjudikasi (beda tinjauan kedua,
-    belum ada putusan 'adjudikasi' di label_log)."""
+    belum ada putusan 'adjudikasi' sesudah tinjauan itu)."""
     try:
         return turso_execute(
             cfg,
             "SELECT * FROM reports r WHERE r.status = 'verified' "
-            "AND EXISTS (SELECT 1 FROM label_log l "
-            "WHERE l.report_id = r.id AND l.aksi = 'tinjauan_kedua' "
-            "AND l.label <> r.label) "
-            "AND NOT EXISTS (SELECT 1 FROM label_log a "
-            "WHERE a.report_id = r.id AND a.aksi = 'adjudikasi') "
+            "AND " + _open_dispute_sql() + " "
             "ORDER BY verified_at ASC LIMIT ?",
             [int(limit)])
     except Exception:
@@ -760,11 +1101,16 @@ def adjudicate_report(cfg: dict, report_id: int, putusan: str,
 
     putusan 'pertahankan': label beku dipertahankan — perbedaan
     dinyatakan selesai. putusan 'diragukan': label beku diragukan —
-    baris tetap di luar hitungan disepakati dan ditandai untuk
-    ditinjau ulang di luar app. TIDAK mengubah reports.label (label
-    pertama tetap beku); hanya mencatat putusan di label_log sebagai
-    'adjudikasi'. Kembalikan False bila tidak ada perbedaan yang
-    menunggu adjudikasi untuk laporan ini."""
+    baris KELUAR DARI KORPUS (corpus_excluded=1, migrasi 0002) dan
+    tidak lagi masuk hitungan disepakati. TIDAK mengubah reports.label
+    (label pertama tetap beku); putusan tercatat di label_log sebagai
+    'adjudikasi' (kolom putusan + kolom label demi kompatibilitas).
+    Kembalikan False bila tidak ada perbedaan yang menunggu
+    adjudikasi untuk laporan ini, bila putusan tidak tersimpan
+    (Ronde 8, S1 — sukses tanpa jejak dilarang), atau bila migrasi
+    0002 belum diterapkan untuk putusan 'diragukan' (Ronde 8, M2 —
+    putusan tanpa efek korpus dilarang; gagal JUJUR, bukan diam-diam).
+    """
     if putusan not in ("pertahankan", "diragukan"):
         return False
     rows = turso_execute(
@@ -775,15 +1121,34 @@ def adjudicate_report(cfg: dict, report_id: int, putusan: str,
     pending = turso_execute(
         cfg,
         "SELECT COUNT(*) AS n FROM reports r WHERE r.id = ? "
-        "AND EXISTS (SELECT 1 FROM label_log l WHERE l.report_id = r.id "
-        "AND l.aksi = 'tinjauan_kedua' AND l.label <> r.label) "
-        "AND NOT EXISTS (SELECT 1 FROM label_log a "
-        "WHERE a.report_id = r.id AND a.aksi = 'adjudikasi')",
+        "AND " + _open_dispute_sql(),
         [int(report_id)])
     if not pending or not pending[0]["n"]:
         return False
-    _log_label(cfg, report_id, "adjudikasi", putusan, actor=actor)
-    return True
+    if putusan == "diragukan":
+        # Efek korpus WAJIB ikut putusan — tanpa kolomnya, putusan
+        # ini tidak boleh dicatat sama sekali (GG-13).
+        if not _reports_has_r8_cols(cfg):
+            return False
+        try:
+            res = turso_batch(cfg, [
+                ("UPDATE reports SET corpus_excluded = 1 WHERE id = ?",
+                 [int(report_id)]),
+                ("INSERT INTO label_log (report_id, aksi, label, actor,"
+                 " putusan) VALUES (?, ?, ?, ?, ?) RETURNING id"
+                 if _label_log_has_putusan(cfg) else
+                 "INSERT INTO label_log (report_id, aksi, label, actor)"
+                 " VALUES (?, ?, ?, ?) RETURNING id",
+                 [int(report_id), "adjudikasi", putusan, actor, putusan]
+                 if _label_log_has_putusan(cfg) else
+                 [int(report_id), "adjudikasi", putusan, actor]),
+            ])
+        except Exception:
+            return False
+        return bool(res and len(res) > 1 and res[1])
+    logged = _log_label_checked(cfg, report_id, "adjudikasi", putusan,
+                                actor=actor, putusan=putusan)
+    return logged is not None
 
 
 def fetch_second_review_sample(cfg: dict, limit: int = 3) -> list:
@@ -824,11 +1189,31 @@ def second_review(cfg: dict, report_id: int, label: str,
 def submit_report(cfg: dict, *, channel: str, raw_text: str,
                   sender_raw: str | None, consent_data_use: bool,
                   score: float, band_final: str,
-                  rules_fired: list) -> tuple[int, str]:
-    """Simpan satu laporan (status 'pending'). Kembalikan (id, created_at).
+                  rules_fired: list,
+                  via_ocr: bool = False) -> tuple[int, str, str | None]:
+    """Simpan satu laporan (status 'pending').
+
+    Kembalikan (id, created_at, track_code). track_code None bila
+    migrasi 0002 belum diterapkan (pra-migrasi: intake tetap jalan,
+    resep menampilkan nomor laporan + catatan — lihat pemanggil).
 
     Teks yang ditulis HANYA hasil scrub; created_at diisi basis data
     (UTC) dan menjadi tanggal submit resmi pada log pencatatan.
+
+    Ronde 8, M4: bila consent, INSERT reports + INSERT consent_log
+    berjalan dalam SATU batch pipeline (turso_batch) — satu transaksi
+    menurut dokumentasi Hrana: bila consent_log gagal, SELURUH simpan
+    dibatalkan dan exception merambat (warga melihat "gagal tersimpan"
+    dan TIDAK ADA baris yatim consent=1 tanpa bukti). Langkah kedua
+    memakai last_insert_rowid() — id hasil langkah pertama pada
+    koneksi yang sama — karena pipeline tidak punya variabel
+    antar-langkah. CATATAN: semantik rollback-on-failure batch adalah
+    asumsi dari dokumentasi Hrana (bentuk wire + error SUDAH
+    diverifikasi ke Turso live read-only, tetapi rollback belum
+    terbukti live) — smoke test WAJIB pada submit consent pertama
+    pasca-deploy: reports + consent_log harus sama-sama tertulis.
+    Sebagai pertahanan kedua, view corpus_export (migrasi 0002)
+    mensyaratkan ADA baris consent_log.
     """
     clean_text, _findings = scrub(raw_text)
     sender_hash = hash_sender(sender_raw, cfg.get("salt")) \
@@ -839,27 +1224,51 @@ def submit_report(cfg: dict, *, channel: str, raw_text: str,
         enrichment = build_enrichment(clean_text)
     except Exception:
         enrichment = None
-    rows = turso_execute(
-        cfg,
-        "INSERT INTO reports (channel, text_scrubbed, model_score, "
-        "model_band, rules_fired, consent_data_use, consent_at, "
-        "sender_hash, text_hash, enrichment) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-        "RETURNING id, created_at",
-        [channel, clean_text, float(score), BAND_STORE[band_final],
-         json.dumps(rules_fired), 1 if consent_data_use else 0,
-         datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-         if consent_data_use else None,
-         sender_hash, text_hash_of(clean_text), enrichment])
-    report_id = rows[0]["id"]
-    created_at = rows[0]["created_at"]
+    has_cols = _reports_has_r8_cols(cfg)
+    track_code = new_track_code() if has_cols else None
+    if has_cols:
+        cols = ("channel, text_scrubbed, model_score, model_band, "
+                "rules_fired, consent_data_use, consent_at, "
+                "sender_hash, text_hash, enrichment, track_code, "
+                "via_ocr")
+        vals = ("?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?")
+        args = [channel, clean_text, float(score),
+                BAND_STORE[band_final], json.dumps(rules_fired),
+                1 if consent_data_use else 0,
+                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                if consent_data_use else None,
+                sender_hash, text_hash_of(clean_text), enrichment,
+                track_code, 1 if via_ocr else 0]
+    else:
+        cols = ("channel, text_scrubbed, model_score, model_band, "
+                "rules_fired, consent_data_use, consent_at, "
+                "sender_hash, text_hash, enrichment")
+        vals = ("?, ?, ?, ?, ?, ?, ?, ?, ?, ?")
+        args = [channel, clean_text, float(score),
+                BAND_STORE[band_final], json.dumps(rules_fired),
+                1 if consent_data_use else 0,
+                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                if consent_data_use else None,
+                sender_hash, text_hash_of(clean_text), enrichment]
     if consent_data_use:
-        turso_execute(
-            cfg,
+        res = turso_batch(cfg, [(
+            "INSERT INTO reports (" + cols + ") "
+            "VALUES (" + vals + ") RETURNING id, created_at",
+            args,
+        ), (
             "INSERT INTO consent_log (report_id, consent_version, "
-            "consent_text_hash) VALUES (?, ?, ?)",
-            [report_id, CONSENT_VERSION, consent_text_hash()])
-    return report_id, created_at
+            "consent_text_hash) VALUES (last_insert_rowid(), ?, ?)",
+            [CONSENT_VERSION, consent_text_hash()],
+        )])
+        row = res[0][0]
+    else:
+        rows = turso_execute(
+            cfg,
+            "INSERT INTO reports (" + cols + ") "
+            "VALUES (" + vals + ") RETURNING id, created_at",
+            args)
+        row = rows[0]
+    return row["id"], row["created_at"], track_code
 
 
 def fetch_gallery(cfg: dict, limit: int = 30) -> list:
@@ -1133,51 +1542,62 @@ def render_emergency_card(analysis: dict) -> None:
 
 
 def _render_track_expander(cfg: dict, db_ready: bool) -> None:
-    """Loop tertutup (v6.0): warga melacak status laporannya sendiri
-    hanya dengan nomor laporan. Yang tampil status + label bahasa
-    warga + tanggal — isi laporan dan data lain tidak ditampilkan."""
+    """Loop tertutup (v6.0; kode lacak acak sejak v6.1.6): warga
+    melacak status laporannya sendiri hanya dengan KODE LACAK yang
+    diterima saat mengirim. Yang tampil status + label bahasa warga
+    + tanggal — isi laporan dan data lain tidak ditampilkan.
+
+    Ronde 8, M9: nomor laporan urut DIHAPUS sebagai kunci lacak —
+    nomor urut bisa ditebak (1, 2, 3, …) dan label hasil pemeriksaan
+    orang lain bisa dienumerasi. Kode lacak 8 karakter acak adalah
+    bukti kepemilikan; tanpa kode yang benar, tidak ada yang tampil.
+    Laporan lama (pra-migrasi 0002) mendapat kode lewat backfill —
+    pengelola dapat menyampaikannya kepada pelapor bila diminta."""
     with st.expander("🔎 Lacak laporan saya"):
         st.caption(
-            "Masukkan **nomor laporan** yang kamu terima saat "
-            "mengirim (contoh: 12). Yang tampil hanya status "
+            "Masukkan **kode lacak** yang kamu terima saat mengirim "
+            "(contoh: K7M2-Q9XA). Yang tampil hanya status "
             "pemeriksaannya — isi laporanmu dan data lain tidak "
             "ditampilkan di sini.")
         if not db_ready:
             st.info("Pelacakan belum aktif pada deployment ini "
                     "(basis data belum terhubung).")
             return
-        num = st.number_input(
-            "Nomor laporan", min_value=1, step=1, value=None,
-            key="sk_track_num", placeholder="contoh: 12")
+        code = st.text_input(
+            "Kode lacak", key="sk_track_code",
+            placeholder="contoh: K7M2-Q9XA",
+            help="Kode 8 karakter dari resep pengiriman laporanmu. "
+                 "Kode ini acak dan hanya kamu yang tahu — jangan "
+                 "dibagikan.")
         if st.button("Cek status laporan", key="btn_track"):
-            if not num:
-                st.warning("Isi dulu nomor laporannya.")
+            if not (code or "").strip():
+                st.warning("Isi dulu kode lacaknya.")
             else:
                 try:
-                    row = fetch_report_status(cfg, int(num))
+                    row = fetch_report_by_code(cfg, code)
                 except Exception as exc:
                     st.error(f"Status belum bisa dimuat: {exc}")
                     row = None
                 st.session_state["sk_track_row"] = row
-                st.session_state["sk_track_for"] = int(num)
+                st.session_state["sk_track_for"] = (code or "").strip()
         row = st.session_state.get("sk_track_row")
         if row is None and st.session_state.get("sk_track_for"):
             st.warning(
-                "Nomor laporan tidak ditemukan. Periksa lagi "
-                "nomornya — atau laporan mungkin sudah dihapus atas "
-                "permintaan pelapor (hak hapus).")
+                "Kode lacak tidak ditemukan. Periksa lagi kodenya — "
+                "atau laporan mungkin sudah dihapus atas permintaan "
+                "pelapor (hak hapus).")
         elif row is not None:
             if row["status"] == "deleted":
                 st.warning(
-                    "Nomor laporan tidak ditemukan. Periksa lagi "
-                    "nomornya — atau laporan mungkin sudah dihapus "
+                    "Kode lacak tidak ditemukan. Periksa lagi "
+                    "kodenya — atau laporan mungkin sudah dihapus "
                     "atas permintaan pelapor (hak hapus).")
             elif row["status"] == "pending":
                 st.info(
                     "⏳ **Masih menunggu pemeriksaan tim** — diterima "
                     f"{fmt_wita(row['created_at'])}. Label hanya "
                     "ditentukan manusia, jadi mohon ditunggu; cek "
-                    "lagi nanti dengan nomor yang sama.")
+                    "lagi nanti dengan kode yang sama.")
             elif row["status"] == "verified":
                 label_w = TRACK_LABEL_WARGA.get(
                     row["label"], row["label"] or "-")
@@ -1199,8 +1619,8 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
         "Tempel pesan yang Anda terima — sistem memberi **hasil cek "
         "awal** dari model pendeteksi yang sama dengan tab Analisis "
         "Tunggal, dan Anda dapat **melaporkannya** agar warga lain "
-        "terlindungi. Setiap laporan tercatat dengan **nomor laporan "
-        "unik** dan **tanggal submit** sebagai bukti penerimaan.")
+        "terlindungi. Setiap laporan tercatat dengan **kode lacak "
+        "acak** dan **tanggal submit** sebagai bukti penerimaan.")
     cfg = load_config()
     db_ready = bool(cfg.get("url") and cfg.get("token"))
     _render_hero(cfg, db_ready)
@@ -1215,10 +1635,14 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
             "(kredensial basis data belum dipasang) — fitur **cek** "
             "tetap bisa dipakai, laporan belum bisa dikirim.")
 
-    # Hardening Fase 2.5: status kill switch + pemutus antrean.
+    # Hardening Fase 2.5 + Ronde 8, M6: status kill switch + pemutus
+    # antrean. Gagal membaca status = intake_unknown -> gerbang
+    # check_storage_gate MENUTUP simpan (fail-closed), bukan membuka
+    # intake seperti dulu.
     intake_is_open = True
     queue_full = False
     ts_active = False
+    intake_unknown = False
     if db_ready:
         try:
             state = fetch_lapor_state(cfg)
@@ -1227,8 +1651,14 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
             ts_active = (turnstile_keys_present(cfg)
                          and state["turnstile_on"])
         except Exception:
-            intake_is_open, queue_full, ts_active = True, False, False
-    if db_ready and not intake_is_open:
+            intake_unknown = True
+    if db_ready and intake_unknown:
+        st.warning(
+            "⚠️ **Status penerimaan laporan tidak dapat dipastikan** "
+            "saat ini (basis data tidak menjawab) — laporan baru "
+            "sementara tidak tersimpan. Fitur **cek tetap bisa "
+            "dipakai**; coba lagi nanti.")
+    elif db_ready and not intake_is_open:
         st.warning(
             "⏸️ **Penerimaan laporan sedang ditutup sementara** oleh "
             "pengelola. Fitur **cek tetap bisa dipakai** — hasil cek "
@@ -1278,6 +1708,12 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
                     "Gambar tidak bisa dibuka. Coba berkas PNG/JPG "
                     "lain, atau tempel teksnya manual di bawah.")
         if st.session_state.get("sk_ocr_text"):
+            if len(st.session_state["sk_ocr_text"]) > 2000:
+                st.warning(
+                    "Teks hasil bacaan gambar lebih dari 2000 "
+                    "karakter — yang bisa dipakai hanya 2000 karakter "
+                    "pertama; sisanya terpotong. Bila pesannya panjang, "
+                    "tempel teksnya manual di kolom **Isi pesan**.")
             ocr_edited = st.text_area(
                 "Teks hasil bacaan gambar — periksa & betulkan dulu",
                 value=st.session_state["sk_ocr_text"],
@@ -1285,6 +1721,11 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
             if st.button("⬇️ Pakai teks ini sebagai isi pesan",
                          key="btn_ocr_use"):
                 st.session_state["sk_text"] = ocr_edited
+                # Ronde 8, S6: tandai asal teks (provenance OCR) —
+                # disimpan sebagai via_ocr di basis data dan ditampilkan
+                # di kartu peninjau supaya salah baca OCR bisa
+                # dipertimbangkan sebelum memberi label.
+                st.session_state["sk_text_via_ocr"] = True
                 st.session_state.pop("sk_ocr_text", None)
                 st.rerun()
     text = st.text_area(
@@ -1321,47 +1762,20 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
                 "**Cek & Kirim Laporan** sekali lagi. Cek belum "
                 "dijalankan agar layanan terlindung dari bot.")
         else:
-            # Gerbang simpan (hardening): kill switch, pemutus antrean,
-            # batas per pengirim & batas harian global. Hasil CEK tetap
-            # diberikan; yang ditahan hanya penyimpanannya.
+            # Gerbang simpan (Ronde 8, GG-16): kill switch, pemutus
+            # antrean, batas per pengirim & batas harian global, batas
+            # teks-sama, batas sesi — SEMUA lewat check_storage_gate
+            # yang fail-closed: kegagalan pemeriksaan apa pun = TIDAK
+            # BOLEH SIMPAN. Hasil CEK tetap diberikan; yang ditahan
+            # hanya penyimpanannya.
             sender_raw = (sender or "").strip() or None
-            can_store = db_ready and intake_is_open and not queue_full
-            block_reason = None
-            if db_ready and can_store:
-                try:
-                    s_hash = hash_sender(sender_raw, cfg.get("salt")) \
-                        if sender_raw else None
-                except Exception:
-                    s_hash = None
-                try:
-                    if s_hash and sender_today_count(
-                            cfg, s_hash) >= MAX_PER_SENDER_PER_DAY:
-                        can_store = False
-                        block_reason = (
-                            f"batas {MAX_PER_SENDER_PER_DAY} laporan "
-                            "per pengirim per hari tercapai")
-                    elif reports_today_count(cfg) >= MAX_REPORTS_PER_DAY:
-                        can_store = False
-                        block_reason = ("batas laporan harian layanan "
-                                         "tercapai")
-                except Exception:
-                    can_store = True  # gagal cek batas != blokir warga
-                if can_store:
-                    # Anti-racun korpus (v6.0): teks yang sama persis
-                    # dibatasi per hari — banjir salinan adalah pola
-                    # peracunan data latih, bukan antusiasme warga.
-                    try:
-                        clean_preview, _f = scrub(raw)
-                        if same_text_today_count(
-                                cfg, text_hash_of(clean_preview)) \
-                                >= MAX_SAME_TEXT_PER_DAY:
-                            can_store = False
-                            block_reason = (
-                                "pesan yang sama persis sudah "
-                                "dilaporkan 3 kali atau lebih hari "
-                                "ini — kami anggap duplikat berlebih")
-                    except Exception:
-                        pass  # gagal cek != blokir warga
+            via_ocr = bool(st.session_state.get("sk_text_via_ocr"))
+            can_store, block_reason = check_storage_gate(
+                cfg, db_ready=db_ready, intake_open=intake_is_open,
+                queue_full=queue_full, intake_unknown=intake_unknown,
+                sender_raw=sender_raw, raw_text=raw,
+                session_submits=st.session_state.get(
+                    "sk_submits_count", 0))
             with st.spinner("Menilai pesan…"):
                 analysis = analyze_one(engine, raw)
             st.session_state["sk_last"] = analysis
@@ -1372,17 +1786,29 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
                 if rule.get("calm", {}).get("lowered"):
                     rules_fired.append("PENENANG")
                 try:
-                    report_id, created_at = submit_report(
+                    report_id, created_at, track_code = submit_report(
                         cfg, channel=channel, raw_text=raw,
                         sender_raw=sender_raw,
                         consent_data_use=bool(consent),
                         score=analysis["res"]["p_scam"],
                         band_final=analysis["final_zone"],
-                        rules_fired=rules_fired)
+                        rules_fired=rules_fired,
+                        via_ocr=via_ocr)
                     st.session_state["sk_receipt"] = {
                         "id": report_id, "created_at": created_at,
+                        "track_code": track_code,
                         "consent": bool(consent)}
                     st.session_state["sk_last_submit_ts"] = time.time()
+                    # Ronde 8, S5: hitung pengiriman per sesi (batas
+                    # 10 — lihat check_storage_gate).
+                    st.session_state["sk_submits_count"] = \
+                        st.session_state.get("sk_submits_count", 0) + 1
+                    # Ronde 8, M5: naikkan nonce supaya widget
+                    # Turnstile me-render ulang dan mengeluarkan token
+                    # BARU untuk pengiriman berikutnya.
+                    st.session_state["sk_ts_nonce"] = \
+                        st.session_state.get("sk_ts_nonce", 0) + 1
+                    st.session_state.pop("sk_text_via_ocr", None)
                 except Exception as exc:
                     st.error(f"Laporan gagal tersimpan: {exc}")
             elif db_ready:
@@ -1397,14 +1823,25 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
 
     receipt = st.session_state.get("sk_receipt")
     if receipt:
+        # Ronde 8, M9: resep menampilkan KODE LACAK acak — bukan
+        # nomor urut. Pra-migrasi 0002 (track_code None): tampilkan
+        # nomor + catatan bahwa kode lacak belum aktif.
+        if receipt.get("track_code"):
+            code_line = (
+                f"Kode lacak Anda: **{receipt['track_code']}** · "
+                f"simpan kode ini — status pemeriksaannya bisa Anda "
+                f"cek kapan saja di bagian **🔎 Lacak laporan saya** "
+                f"di bawah.")
+        else:
+            code_line = (
+                f"Nomor laporan Anda: **#{receipt['id']}** · simpan "
+                f"nomor ini dan hubungi pengelola bila Anda ingin "
+                f"mengetahui statusnya — kode lacak acak belum aktif "
+                f"pada deployment ini.")
         st.success(
-            f"✅ **Laporan terkirim & tercatat.** Nomor laporan Anda: "
-            f"**#{receipt['id']}** · diterima "
+            f"✅ **Laporan terkirim & tercatat.** Diterima "
             f"**{fmt_wita(receipt['created_at'])}** · status awal: "
-            f"menunggu verifikasi tim. **Simpan nomor ini sebagai "
-            f"nomor lacak** — status pemeriksaannya bisa Anda cek "
-            f"kapan saja di bagian **🔎 Lacak laporan saya** di "
-            f"bawah."
+            f"menunggu verifikasi tim. {code_line}"
             + (" Persetujuan penggunaan data: **ya** (galeri anonim + "
                "data latih)." if receipt["consent"]
                else " Persetujuan penggunaan data: **tidak** (hanya "
@@ -1595,10 +2032,18 @@ def fetch_pending(cfg: dict, limit: int = 50) -> list:
     adalah sinyal ordinal: peninjau belajar laporan mana yang dinilai
     model paling berisiko hanya dari posisinya. Antrean triase
     terurut skor ada terpisah (fetch_pending_triage) untuk
-    perencanaan kapasitas — bukan untuk pelabelan."""
+    perencanaan kapasitas — bukan untuk pelabelan.
+
+    Ronde 8, GG-12: kolom yang diambil DIKUNCI eksplisit (bukan
+    SELECT *) — skor/band/sinyal/pengayaan TIDAK PERNAH keluar dari
+    basis data menuju kartu pelabelan, jadi kebocoran tidak lagi
+    bergantung pada "UI tidak menampilkannya". Kartu pending hanya
+    butuh id/teks/kanal/waktu/consent (+ via_ocr sebagai provenance
+    teks, bukan sinyal mesin)."""
     return turso_execute(
         cfg,
-        "SELECT * FROM reports WHERE status = 'pending' "
+        "SELECT id, channel, text_scrubbed, consent_data_use, "
+        "created_at, via_ocr FROM reports WHERE status = 'pending' "
         "ORDER BY created_at ASC, id ASC LIMIT ?",
         [int(limit)])
 
@@ -1802,9 +2247,15 @@ def analytics_snapshot(cfg: dict) -> dict:
              "WHERE created_at >= datetime('now', '-7 days')")[0]["n"]
     snap["status"] = {r["status"]: r["n"] for r in turso_execute(
         cfg, "SELECT status, COUNT(*) AS n FROM reports GROUP BY status")}
+    # Ronde 8, M3: distribusi band model HANYA atas laporan
+    # TERVERIFIKASI. Agregat atas seluruh reports (termasuk pending)
+    # adalah sinyal pra-label: dengan 1 laporan pending, "ESKALASI 1"
+    # SAMA DENGAN band laporan itu — peninjau tahu bandnya sebelum
+    # memberi label. Metrik lain (total/kanal/per hari) tetap atas
+    # semua laporan: hitungan itu tidak mengungkap band per laporan.
     snap["band"] = {r["model_band"]: r["n"] for r in turso_execute(
         cfg, "SELECT model_band, COUNT(*) AS n FROM reports "
-             "GROUP BY model_band")}
+             "WHERE status = 'verified' GROUP BY model_band")}
     snap["channel"] = {r["channel"]: r["n"] for r in turso_execute(
         cfg, "SELECT channel, COUNT(*) AS n FROM reports "
              "GROUP BY channel")}
@@ -1923,8 +2374,14 @@ def _render_analytics(cfg: dict) -> None:
         st.bar_chart({"Tanggal": [d for d, _ in s["daily14"]],
                       "Laporan": [n for _, n in s["daily14"]]},
                      x="Tanggal", y="Laporan")
-        st.caption("Distribusi band model: " + " · ".join(
-            f"{k} {v}" for k, v in sorted(s["band"].items())))
+        # Ronde 8, M3: distribusi ini HANYA atas laporan terverifikasi
+        # (lihat analytics_snapshot) — dinyatakan eksplisit di label.
+        st.caption("Distribusi band model (terverifikasi): "
+                   + " · ".join(
+                       f"{k} {v}" for k, v in sorted(s["band"].items()))
+                   if s["band"] else
+                   "Distribusi band model (terverifikasi): "
+                   "belum ada laporan terverifikasi.")
     with c2:
         st.caption("Kanal: " + " · ".join(
             f"{CHANNELS.get(k, k)} {v}"
@@ -1939,7 +2396,11 @@ def _render_analytics(cfg: dict) -> None:
         "Catatan: jumlah *views* halaman tidak tampil di sini — app "
         "tidak bisa menghitung penontonnya sendiri secara akurat. "
         "Statistik penonton ada di dashboard Streamlit Cloud pemilik "
-        "app; panel ini khusus data laporan yang terverifikasi.")
+        "app. Panel ini mencakup SEMUA laporan (termasuk yang masih "
+        "menunggu verifikasi) — KECUALI distribusi band model dan "
+        "progres korpus di atas, yang hanya atas laporan terverifikasi "
+        "(band laporan pending tidak ditampilkan di mana pun sebelum "
+        "pelabelan).")
 
 
 def _report_meta(cfg: dict, r: dict, blind: bool = False) -> str:
@@ -1955,6 +2416,9 @@ def _report_meta(cfg: dict, r: dict, blind: bool = False) -> str:
     ]
     if blind:
         return " · ".join(parts)
+    # Ronde 8, S6: penanda provenance OCR pada daftar terverifikasi.
+    if r.get("via_ocr"):
+        parts.append("📷 teks dari OCR")
     if r.get("sender_hash"):
         n = sender_report_count(cfg, r["sender_hash"])
         parts.append(f"pengirim {r['sender_hash'][:8]}… "
@@ -2062,9 +2526,9 @@ def render_admin_tab() -> None:
     st.caption(
         "Antrean ini urut waktu masuk (paling lama menunggu di atas) — "
         "bukan urut skor model. Urutan skor adalah sinyal mesin, jadi "
-        "tidak dipakai di sini. Antrean triase terurut skor ada "
-        "terpisah di bawah (expander tertutup) untuk perencanaan "
-        "kapasitas saja.")
+        "tidak dipakai di sini. Perencanaan kapasitas ada di bawah "
+        "(expander tertutup yang hanya menampilkan jumlah total, "
+        "tanpa daftar terurut skor).")
     if not pending:
         st.info("Antrean kosong. Tidak ada laporan menunggu verifikasi.")
     # Pelabelan BUTA (Ronde 5, M1; diperkuat Ronde 6, M1): kartu pending
@@ -2088,6 +2552,13 @@ def render_admin_tab() -> None:
             # label tersimpan di daftar terverifikasi. S4 — metadata
             # pengirim/duplikasi DIHAPUS via blind=True.
             st.caption(_report_meta(cfg, r, blind=True))
+            # Ronde 8, S6: provenance OCR — peninjau tahu teks ini
+            # dibaca dari gambar, jadi salah baca OCR (huruf tertukar)
+            # bisa dipertimbangkan sebelum memberi label.
+            if r.get("via_ocr"):
+                st.caption("📷 Teks ini dibaca dari tangkapan layar "
+                           "(OCR) — periksa ejaan: mesin OCR bisa "
+                           "salah membaca huruf/angka.")
             st.caption("🤖 Saran mesin disembunyikan sampai label "
                        "tersimpan (pelabelan buta) — putuskan dari "
                        "teksnya.")

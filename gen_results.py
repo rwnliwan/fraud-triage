@@ -48,10 +48,16 @@ def _load(name):
 
 
 def _metrik(ev):
-    """Ekstrak metrik full-stack (lolos_final) dari satu file evaluasi."""
+    """Ekstrak metrik full-stack (lolos_final) dari satu file evaluasi.
+
+    n=150: tiap ukuran gerbang dihitung atas 150 pesan per label
+    (set hakim lama 300: 150 SAH / 150 SMISHING) — n disimpan
+    eksplisit per stage (Ronde 8, N4) supaya CI Wilson di journey.py
+    tidak lagi memakai default diam-diam."""
     lab = ev["id300"]["per_label"]
     panel = ev["panel16"]["per_label"]
     return {
+        "n": 150,
         "sah": round(lab["sah"]["lolos_final"] * 100, 1),
         "smishing": round(lab["smishing"]["lolos_final"] * 100, 1),
         "total": round(ev["id300"]["total"]["lolos_final"] * 100, 1),
@@ -72,6 +78,7 @@ TAHAP_0 = {
     "id": "0",
     "nama": "Baseline & diagnosis",
     "tanggal": "2026-10-22",
+    "n": 150,
     "sah": 16.0,
     "smishing": 87.3,
     "total": 51.7,

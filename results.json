@@ -10,6 +10,7 @@
    "id": "0",
    "nama": "Baseline & diagnosis",
    "tanggal": "2026-10-22",
+   "n": 150,
    "sah": 16.0,
    "smishing": 87.3,
    "total": 51.7,
@@ -29,6 +30,7 @@
   },
   {
    "id": "1",
+   "n": 150,
    "sah": 36.0,
    "smishing": 87.3,
    "total": 61.7,
@@ -50,6 +52,7 @@
   },
   {
    "id": "2c",
+   "n": 150,
    "sah": 84.0,
    "smishing": 94.7,
    "total": 89.3,
@@ -71,6 +74,7 @@
   },
   {
    "id": "2d",
+   "n": 150,
    "sah": 92.7,
    "smishing": 88.7,
    "total": 90.7,

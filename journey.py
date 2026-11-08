@@ -69,14 +69,16 @@ def _wilson_ci(k, n, z=1.96):
     return (c - m) / d * 100.0, (c + m) / d * 100.0
 
 
-def _status_tiga(nilai_pct, gerbang, n=150):
+def _status_tiga(nilai_pct, gerbang, n):
     """Vonis tiga status dari CI Wilson vs gerbang.
 
     Mengembalikan (ikon, label, ci_bawah, ci_atas): 'lolos jelas'
     bila seluruh CI di atas gerbang, 'gagal jelas' bila seluruh CI
     di bawah gerbang, 'tidak meyakinkan' bila CI bersinggungan
-    dengan gerbang. n=150: tiap ukuran gerbang dihitung atas 150
-    pesan (150 SAH / 150 SMISHING pada set hakim lama 300)."""
+    dengan gerbang. n WAJIB diteruskan eksplisit dari data stage
+    (Ronde 8, N4 — tanpa default): ukuran sampel adalah bagian dari
+    data, bukan asumsi kode. Untuk set hakim lama 300, n=150 per
+    ukuran gerbang (150 SAH / 150 SMISHING)."""
     k = int(round(nilai_pct / 100.0 * n))
     lo, hi = _wilson_ci(k, n)
     if lo >= gerbang:
@@ -96,10 +98,8 @@ def _gerbang_lines(stage, gates):
     PR-AUC dinilai sebagai titik estimasi (bukan proporsi, tanpa CI)
     dan AUTO-CLOSE sebagai hitungan pasti, jadi keduanya tetap biner.
     """
-    ikon_sah, status_sah, lo_sah, hi_sah = _status_tiga(
-        stage["sah"], gates["sah"])
-    ikon_smi, status_smi, lo_smi, hi_smi = _status_tiga(
-        stage["smishing"], gates["smishing"])
+    ikon_sah, status_sah, lo_sah, hi_sah = _status_tiga(stage["sah"], gates["sah"], stage["n"])
+    ikon_smi, status_smi, lo_smi, hi_smi = _status_tiga(stage["smishing"], gates["smishing"], stage["n"])
     cek = [
         ("SAH (set hakim lama 300 — pensiun)", ikon_sah,
          f"{_fmt_pct(stage['sah'])} (CI Wilson 95% "
@@ -265,7 +265,7 @@ def _bars_html(stages, gates):
             # _gerbang_lines (Ronde 6, M3): hijau lolos jelas, kuning
             # tidak meyakinkan (CI bersinggungan gerbang), merah gagal
             # jelas — bukan biner titik-estimasi vs gerbang.
-            ikon, _status, _lo, _hi = _status_tiga(v, gerbang)
+            ikon, _status, _lo, _hi = _status_tiga(v, gerbang, s["n"])
             warna = {"✅": "#22c55e", "⚠️": "#eab308",
                      "❌": "#ef4444"}[ikon]
             rows.append(

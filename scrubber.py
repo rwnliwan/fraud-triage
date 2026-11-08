@@ -61,24 +61,36 @@ FINDING_NIK = "nik"
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
 # ------------------------------------------------------------------ url
-# Label domain wajib mengandung huruf (dicek ulang di callback) agar
-# angka berformat "50.000.000" tidak pernah terbaca sebagai domain.
-_TLDS = (
-    "com|net|org|info|xyz|top|click|link|online|site|cc|me|io|id|app|"
-    "pro|vip|live|store|shop|today|best|win|icu|sbs|cfd|bond|quest|uno|"
-    "finance|secure|loan|"
-    "ly|gy|gl|gd"  # TLD pemendek tautan: bit.ly, rb.gy, goo.gl, is.gd
-)
+# Ronde 8, M1 (GG-11 — "scrubber URL tidak lengkap"): TIDAK ADA LAGI
+# allowlist TLD. Dua ronde berturut-turut allowlist bocor (R7: query
+# tanpa path; R8: fragment `#` + TLD `.dev`/`.ai` di luar daftar) —
+# kelasnya adalah "URL berbentuk apa pun harus kehilangan ekornya",
+# dan allowlist TIDAK BISA menutup kelas itu (TLD baru muncul terus).
+# Aturan baru, tanpa pengecualian berdasarkan TLD:
+#   * TLD = label akhir mana pun yang seluruhnya huruf (>= 2 huruf).
+#   * Ekor URL = `[/?#]...` — path, query, DAN fragment ikut dibuang
+#     (fragment membawa token pada OAuth implicit flow, mis.
+#     `#access_token=...`).
+#   * URL literal IPv4 (skema wajib) ikut ditangkap sebagai tautan.
+# Perlindungan false-positive tetap di callback `_url_sub` (host
+# WAJIB mengandung huruf — kecuali IPv4 — supaya "Rp50.000.000"
+# dan "3.14" tidak pernah terbaca sebagai domain). Batas desain yang
+# dinyatakan: nama berkas polos ("laporan.pdf") kini ikut terscrub
+# sebagai tautan — arah salah yang aman untuk scrubber PII (lebih
+# baik kelebihan menyaring daripada kebocoran token).
 _URL_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?"
+    r"(?:https?://)(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?"
+    r"(?:[/?#][^\s]*)?"
+    r"|(?:https?://)?(?:www\.)?"
     r"(?:[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?\.)+"
-    r"(?:" + _TLDS + r")"
+    r"[a-z]{2,}"
     # Ronde 7, M1: ekor URL WAJIB menelan "?query" juga bila tanpa path
     # ("(?:[/?][^\s]*)?"). Pola lama "(?:/[^\s]*)?" hanya menelan query
     # bila didahului "/", sehingga "https://host?token=x" menyisakan
     # "?token=x" utuh di teks tersimpan — bertentangan dengan janji
-    # modul ini ("path & query dibuang").
-    r"(?:[/?][^\s]*)?",
+    # modul ini ("path & query dibuang"). Ronde 8, M1: `#` ikut
+    # ditelan — fragment membawa token sama berbahayanya.
+    r"(?:[/?#][^\s]*)?",
     re.IGNORECASE,
 )
 _URL_TRAILING_PUNCT = ".,!?;:'\")»>]}…"
@@ -163,12 +175,14 @@ def scrub(text: str) -> tuple[str, list[str]]:
         raw = m.group(0)
         core = raw.rstrip(_URL_TRAILING_PUNCT)
         suffix = raw[len(core):]
-        # Host = sampai "/" ATAU "?" pertama (Ronde 7, M1: query tanpa
-        # path kini ikut tercocok, jadi host tidak boleh menelan "?…").
-        host = re.split(r"[/?]", re.sub(
+        # Host = sampai "/" ATAU "?" ATAU "#" pertama (Ronde 7, M1:
+        # query tanpa path kini ikut tercocok; Ronde 8, M1: fragment
+        # juga — host tidak boleh menelan "?…" atau "#…").
+        host = re.split(r"[/?#]", re.sub(
             r"^(?:https?://)?(?:www\.)?", "", core,
             flags=re.IGNORECASE))[0].lower()
-        if not any(ch.isalpha() for ch in host):
+        if not any(ch.isalpha() for ch in host) and not re.fullmatch(
+                r"(?:\d{1,3}\.){3}\d{1,3}", host):
             return raw  # bukan domain sungguhan; jangan sentuh
         note(FINDING_TAUTAN)
         return f"[tautan: {host}]" + suffix

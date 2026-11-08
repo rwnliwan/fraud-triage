@@ -1,12 +1,13 @@
 # View `corpus_export` — definisi & dampaknya pada korpus
 
-> Catatan gap-build G3 (8 Nov 2026). View ini **tidak ada di kode repo**
-> (tidak ada `CREATE VIEW` di `siskamling.py`/`app.py`/mana pun) —
-> ia hidup di basis data Turso saja. Definisi di bawah diambil
-> **verbatim dari `sqlite_master` live** (8 Nov 2026, kueri baca saja),
-> supaya dampak perubahan kode pada korpus bisa dilacak dari repo.
+> Catatan gap-build G3 (8 Nov 2026; diperbarui Ronde 8, app v6.1.6).
+> View ini hidup di basis data Turso, tetapi definisinya kini
+> **berversi di repo** sebagai migrasi (`migrations/0002_r8_corpus_track_ocr.sql`)
+> — bukan lagi "tidak ada di kode repo". Definisi di bawah adalah
+> versi 0002; versi aslinya (8 Nov 2026, verbatim dari `sqlite_master`
+> live) tersimpan di `migrations/0001_schema_baseline.sql`.
 
-## Definisi verbatim (Turso, `sqlite_master`)
+## Definisi (migrasi 0002, app v6.1.6)
 
 ```sql
 CREATE VIEW corpus_export AS
@@ -21,6 +22,9 @@ FROM reports
 WHERE status = 'verified'
   AND consent_data_use = 1
   AND label IS NOT NULL
+  AND corpus_excluded = 0
+  AND EXISTS (SELECT 1 FROM consent_log c
+              WHERE c.report_id = reports.id)
 ```
 
 ## Artinya
@@ -30,7 +34,12 @@ Satu baris masuk korpus ekspor **jika dan hanya jika**:
 1. `status = 'verified'` — laporan sudah diverifikasi manusia;
 2. `consent_data_use = 1` — pelapor menyetujui pemakaian data;
 3. `label IS NOT NULL` — sudah berlabel (`SAH` / `SMISHING` /
-   `SPAM_PROMO`, sesuai `CHECK` pada `reports.label`).
+   `SPAM_PROMO`, sesuai `CHECK` pada `reports.label`);
+4. `corpus_excluded = 0` — tidak dikecualikan oleh adjudikasi
+   'diragukan' (Ronde 8, M2; `migrations/0002`);
+5. `EXISTS (consent_log)` — ada jejak persetujuan yang tersimpan
+   (Ronde 8, M4; pertahanan kedua bila simpan consent gagal —
+   baris consent=1 tanpa jejak consent tidak masuk korpus).
 
 Yang **tidak** menjadi syarat view: `gallery_visible` (galeri publik
 adalah soal tampil, bukan soal masuk korpus) dan `category_modus`
@@ -59,6 +68,12 @@ adalah label pertama:
   (`status = 'deleted'`) mengeluarkan baris dari view.
 - `second_review()` tidak mengubah `label` apa pun — ia hanya
   mencatat `tinjauan_kedua` di `label_log`.
+- Adjudikasi **'diragukan'** (Ronde 8, M2; app v6.1.6) menyetel
+  `corpus_excluded = 1` sehingga baris keluar dari view — putusan
+  yang tidak mengubah korpus adalah cacat yang sama. Catatan jujur:
+  salinan korpus yang **sudah diekspor sebelum** putusan itu tidak
+  bisa ditarik kembali; pengecualian hanya berlaku untuk ekspor
+  sesudahnya. Adjudikasi 'pertahankan' tidak mengubah korpus.
 
 Konsekuensi: **label korpus = label pertama yang diverifikasi**,
 bukan label terakhir. Revisi pasca-paparan saran mesin hanya ada di
@@ -77,9 +92,10 @@ bukan label terakhir. Revisi pasca-paparan saran mesin hanya ada di
 
 ## Bila basis data dibangun ulang
 
-Buat ulang view dengan SQL verbatim di atas. Skema tabel terkait
-(`reports`, `label_log`, `app_config`) juga hanya hidup di Turso;
-tidak ada migrasi SQL di repo saat catatan ini ditulis.
+Terapkan migrasi di `migrations/` secara berurutan: `0001_schema_baseline.sql`
+(skema + view versi awal), lalu `0002_r8_corpus_track_ocr.sql` (kolom
+baru + view versi di atas). Jangan membangun view dari catatan ini
+saja — `migrations/` adalah sumber kebenaran berversi.
 
 ## Status live saat catatan ditulis (8 Nov 2026)
 

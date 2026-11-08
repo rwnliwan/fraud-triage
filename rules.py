@@ -32,8 +32,10 @@ Tiga sinyal kuat aturan:
        kerja meminta-masukkan JUGA mencakup "berikan/bagikan/kasih/
        serahkan" ("Berikan OTP Anda di …" sebelumnya lolos); kalimat
        PELINDUNG khas pesan sah ("JANGAN bagikan kode ini kepada siapa
-       pun") tetap BUKAN sinyal — kecocokan yang didahului kata "jangan"
-       dalam jendela dekat dibuang (lihat _matches_s2).
+       pun") tetap BUKAN sinyal — sejak Ronde 8, penjaga hanya menekan
+       bila "jangan" MENGIKAT verba permintaan itu (lihat
+       _GUARD_PROTECTIVE_RE di _matches_s2): "Jangan lupa, berikan
+       OTP …" TIDAK ditekan, karena "jangan"-nya mengikat "lupa".
   S3 — Ancaman + urgensi waktu: kata ancaman (diblokir, hangus, suspend,
        dibekukan, ...) DAN kata tekanan waktu (hari ini, segera, dalam
        24 jam, ...) harus hadir bersamaan; salah satu saja bukan S3.
@@ -79,14 +81,16 @@ SUSPICIOUS_TLDS = {
     "website", "work", "today", "gq", "tk", "ml", "ga", "cf",
 }
 
-# Tautan: skema http(s), awalan www., atau domain polos dengan TLD dikenal.
+# Tautan: skema http(s), awalan www., atau domain polos.
+# Ronde 8, M1 (GG-11): TLD TIDAK LAGI allowlist — label akhir mana pun
+# yang seluruhnya huruf (>= 2 huruf) dihitung sebagai TLD, plus
+# literal IPv4 ber-skema; ekor `[/?#]...` ikut tercocok supaya
+# fragment tidak lolos dari deteksi (kelas yang sama dengan scrubber).
 _URL_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?"
-    r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+"
-    r"(?:com|net|org|info|biz|io|co|id|me|ly|app|dev|tv|"
-    r"xyz|top|cc|click|link|site|online|live|buzz|club|vip|icu|rest|best|"
-    r"one|space|website|work|today|shop|store|secure|gq|tk|ml|ga|cf)"
-    r"(?:/[^\s]*)?",
+    r"(?:https?://)(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:[/?#][^\s]*)?"
+    r"|(?:https?://)?(?:www\.)?"
+    r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}"
+    r"(?:[/?#][^\s]*)?",
     re.IGNORECASE,
 )
 
@@ -167,7 +171,7 @@ def _extract_domains(text):
     for m in _URL_RE.finditer(text):
         raw = m.group(0)
         host = re.sub(r"^https?://", "", raw, flags=re.IGNORECASE)
-        host = host.split("/")[0].lower()
+        host = re.split(r"[/?#]", host)[0].lower()
         if host.startswith("www."):
             host = host[4:]
         # Alamat email juga cocok dengan pola domain; itu wajar — domainnya
@@ -181,18 +185,42 @@ def _domain_tld(domain):
     return domain.rsplit(".", 1)[-1] if "." in domain else ""
 
 
+# Kalimat PELINDUNG (Ronde 8, S7 — GG-7 "penjaga over-supresi"):
+# "jangan" hanya menekan S2 bila ia MENGIKAT kata kerja permintaan itu
+# sendiri: jangan + [penguat: pernah/sekali-kali/sampai/sekali pun] +
+# [kata ganti: Anda/kamu/kau/kalian] + verba meminta + kredensial.
+# Penjaga lama (substring "jangan" dalam 30 karakter sebelum cocok)
+# menekan juga permintaan ASLI yang kebetulan diawali "Jangan lupa, …"
+# atau "Jangan sampai ketinggalan, …" — "jangan" di sana mengikat
+# verba LAIN (lupa/ketinggalan), bukan verba permintaan. Pola ini
+# mengunci IKATAN sintaksisnya, bukan jarak mentahnya.
+_GUARD_PROTECTIVE_RE = re.compile(
+    r"\bjangan\b"
+    r"(?:\s+(?:pernah|sekali-kali|sampai|sekali\s+pun))?"
+    r"(?:\s+(?:anda|kamu|kau|kalian))?"
+    r"\s+(?:berikan|bagikan|masukkan|memberikan|kasih|serahkan|"
+    r"beritahukan|beri\s*tahu)\b"
+    r"[^.!?\n]{0,40}?\b(?:otp|pin|password|kata sandi|sandi|kode)\b",
+    re.IGNORECASE,
+)
+
+
 def _matches_s2(text):
     """True bila ada permintaan memasukkan kredensial / bertindak via tautan.
 
-    Penjaga kalimat pelindung: kecocokan pola yang dalam 30 karakter
-    sebelumnya didahului kata "jangan" dibuang — pesan sah menulis
-    "JANGAN bagikan/masukkan kode ini kepada siapa pun", dan kalimat
-    semacam itu adalah tanda pesan AMAN, bukan permintaan kredensial.
+    Penjaga kalimat pelindung: kecocokan pola HANYA dibuang bila ia
+    jatuh di dalam rentang kalimat pelindung (lihat
+    _GUARD_PROTECTIVE_RE) — pesan sah menulis "JANGAN bagikan/
+    masukkan kode ini kepada siapa pun", dan kalimat semacam itu
+    adalah tanda pesan AMAN, bukan permintaan kredensial. "Jangan
+    lupa, berikan OTP Anda …" TIDAK ditekan: "jangan"-nya mengikat
+    "lupa", bukan "berikan" (Ronde 8, S7).
     """
+    protective = [(m.start(), m.end())
+                  for m in _GUARD_PROTECTIVE_RE.finditer(text)]
     for pat in _S2_PATTERNS:
         for m in pat.finditer(text):
-            window = text[max(0, m.start() - 30):m.start()].lower()
-            if "jangan" in window:
+            if any(a <= m.start() < b for a, b in protective):
                 continue
             return True
     return False
