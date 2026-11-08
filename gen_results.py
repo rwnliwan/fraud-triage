@@ -115,7 +115,8 @@ TAHAP_0 = {
         "Data latih model: UCI SMS Spam Collection (SMS Inggris "
         "±2011). Data nilai: set hakim lama Indonesia 300 pesan (150 SAH / "
         "150 SMISHING, 20 kategori) yang tidak pernah dipakai melatih "
-        "model mana pun."),
+        "model mana pun. (Set pensiun sebagai hakim klaim; lihat "
+        "Protokol v1.)"),
 }
 
 NARASI = {
@@ -163,8 +164,11 @@ NARASI = {
     "2c": {
         "nama": "Perakitan & penilaian paket dwibahasa",
         "tanggal": "2026-10-22",
-        "vonis": "DITOLAK — gagal tipis: SAH 84,0% (kurang 2 pesan), "
-                 "SMISHING 94,7% (kurang 1 pesan), AUTO-CLOSE 3",
+        "vonis": "DITOLAK — vonis tiga status (Edisi v3.3, CI Wilson 95%): "
+                 "SAH 84,0% tidak meyakinkan (CI 77,3–89,0; gerbang 85), "
+                 "SMISHING 94,7% tidak meyakinkan (CI 89,8–97,3; gerbang 95), "
+                 "AUTO-CLOSE 3 gagal jelas (gerbang 0), PR-AUC 0,9862 lolos "
+                 "sebagai titik estimasi",
         "warna_vonis": "merah",
         "hipotesis": (
             "Fine-tune DistilBERT multilingual pada korpus dwibahasa "
@@ -210,9 +214,11 @@ NARASI = {
     "2d": {
         "nama": "Loop perbaikan 2D",
         "tanggal": "2026-10-23",
-        "vonis": "DITOLAK — 2/4 gerbang; SAH sembuh 92,7% tetapi "
-                 "SMISHING mundur 88,7% dan AUTO-CLOSE 2; model app "
-                 "tidak ditukar",
+        "vonis": "DITOLAK — vonis tiga status (Edisi v3.3, CI Wilson 95%): "
+                 "SAH 92,7% lolos jelas (CI 87,3–95,9), SMISHING 88,7% "
+                 "gagal jelas (CI 82,6–92,8; gerbang 95), AUTO-CLOSE 2 "
+                 "gagal jelas (gerbang 0), PR-AUC 0,9882 lolos sebagai "
+                 "titik estimasi; model app tidak ditukar",
         "warna_vonis": "merah",
         "hipotesis": (
             "Menambah data latih tepat pada tiga kategori terlemah 2C — "
