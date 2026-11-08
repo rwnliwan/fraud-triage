@@ -20,6 +20,7 @@ Tahap 2C vs 2D dari `kategori_heatmap` di results.json.
 """
 
 import json
+import math
 import os
 from functools import lru_cache
 
@@ -54,25 +55,75 @@ def _load_results():
         return json.load(f)
 
 
+def _wilson_ci(k, n, z=1.96):
+    """Interval kepercayaan Wilson 95% untuk k sukses dari n percobaan.
+
+    Mengembalikan (bawah, atas) dalam persen. Dipakai _gerbang_lines
+    untuk vonis tiga status (Ronde 6, M3)."""
+    if n <= 0:
+        return 0.0, 0.0
+    p = k / n
+    d = 1 + z * z / n
+    c = p + z * z / (2 * n)
+    m = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return (c - m) / d * 100.0, (c + m) / d * 100.0
+
+
+def _status_tiga(nilai_pct, gerbang, n=150):
+    """Vonis tiga status dari CI Wilson vs gerbang.
+
+    Mengembalikan (ikon, label, ci_bawah, ci_atas): 'lolos jelas'
+    bila seluruh CI di atas gerbang, 'gagal jelas' bila seluruh CI
+    di bawah gerbang, 'tidak meyakinkan' bila CI bersinggungan
+    dengan gerbang. n=150: tiap ukuran gerbang dihitung atas 150
+    pesan (150 SAH / 150 SMISHING pada set hakim lama 300)."""
+    k = int(round(nilai_pct / 100.0 * n))
+    lo, hi = _wilson_ci(k, n)
+    if lo >= gerbang:
+        return "✅", "lolos jelas", lo, hi
+    if hi < gerbang:
+        return "❌", "gagal jelas", lo, hi
+    return "⚠️", "tidak meyakinkan", lo, hi
+
+
 def _gerbang_lines(stage, gates):
-    """Baris vonis per gerbang (✅/❌) dihitung dari data vs ambang."""
+    """Baris vonis per gerbang dihitung dari data vs ambang.
+
+    SAH/SMISHING memakai vonis TIGA STATUS berbasis CI Wilson 95%
+    (Ronde 6, M3) — sama seperti vonis resmi di results.json — bukan
+    biner titik-estimasi: 2C SAH 84,0% (CI 77,3–89,0) dan SMISHING
+    94,7% (CI 89,8–97,3) adalah 'tidak meyakinkan', bukan 'gagal'.
+    PR-AUC dinilai sebagai titik estimasi (bukan proporsi, tanpa CI)
+    dan AUTO-CLOSE sebagai hitungan pasti, jadi keduanya tetap biner.
+    """
+    ikon_sah, status_sah, lo_sah, hi_sah = _status_tiga(
+        stage["sah"], gates["sah"])
+    ikon_smi, status_smi, lo_smi, hi_smi = _status_tiga(
+        stage["smishing"], gates["smishing"])
     cek = [
-        ("SAH (set 300)", stage["sah"] >= gates["sah"],
-         f"{_fmt_pct(stage['sah'])} — gerbang ≥ {_fmt_pct(gates['sah'])}"),
-        ("SMISHING dieskalasi (set 300)", stage["smishing"] >= gates["smishing"],
-         f"{_fmt_pct(stage['smishing'])} — gerbang ≥ "
-         f"{_fmt_pct(gates['smishing'])}"),
-        ("PR-AUC Inggris (UCI test)", stage["uci_pr_auc"] >= gates["uci_pr_auc"],
+        ("SAH (set hakim lama 300 — pensiun)", ikon_sah,
+         f"{_fmt_pct(stage['sah'])} (CI Wilson 95% "
+         f"{_fmt_pct(lo_sah)}–{_fmt_pct(hi_sah)}; gerbang ≥ "
+         f"{_fmt_pct(gates['sah'])}) — **{status_sah}**"),
+        ("SMISHING dieskalasi (set hakim lama 300 — pensiun)", ikon_smi,
+         f"{_fmt_pct(stage['smishing'])} (CI Wilson 95% "
+         f"{_fmt_pct(lo_smi)}–{_fmt_pct(hi_smi)}; gerbang ≥ "
+         f"{_fmt_pct(gates['smishing'])}) — **{status_smi}**"),
+        ("PR-AUC Inggris (UCI test)",
+         "✅" if stage["uci_pr_auc"] >= gates["uci_pr_auc"] else "❌",
          f"{_fmt_auc(stage['uci_pr_auc'])} — gerbang ≥ "
-         f"{_fmt_auc(gates['uci_pr_auc'])}"),
-        ("Smishing AUTO-CLOSE", stage["auto_close"] == gates["auto_close"],
-         f"{stage['auto_close']} — gerbang = {gates['auto_close']}"),
+         f"{_fmt_auc(gates['uci_pr_auc'])} (titik estimasi, tanpa CI)"),
+        ("Smishing AUTO-CLOSE",
+         "✅" if stage["auto_close"] == gates["auto_close"] else "❌",
+         f"{stage['auto_close']} — gerbang = {gates['auto_close']}"
+         + (" (lolos)" if stage["auto_close"] == gates["auto_close"]
+            else " (gagal jelas)")),
     ]
     lines = []
-    for nama, ok, nilai in cek:
-        lines.append(f"- {'✅' if ok else '❌'} **{nama}:** {nilai}")
+    for nama, ikon, nilai in cek:
+        lines.append(f"- {ikon} **{nama}:** {nilai}")
     lines.append(
-        f"- ℹ️ Total lolos set 300: {_fmt_pct(stage['total'])} · "
+        f"- ℹ️ Total lolos set hakim lama 300: {_fmt_pct(stage['total'])} · "
         f"Panel 16: sah {_fmt_pct(stage['panel_sah'])}, "
         f"smishing {_fmt_pct(stage['panel_smishing'])} (bukan gerbang)")
     return lines
@@ -209,7 +260,13 @@ def _bars_html(stages, gates):
                 ("sah", "SAH", gates["sah"]),
                 ("smishing", "SMISHING", gates["smishing"])):
             v = s[kunci]
-            warna = "#22c55e" if v >= gerbang else "#ef4444"
+            # Warna mengikuti vonis tiga status yang sama seperti
+            # _gerbang_lines (Ronde 6, M3): hijau lolos jelas, kuning
+            # tidak meyakinkan (CI bersinggungan gerbang), merah gagal
+            # jelas — bukan biner titik-estimasi vs gerbang.
+            ikon, _status, _lo, _hi = _status_tiga(v, gerbang)
+            warna = {"✅": "#22c55e", "⚠️": "#eab308",
+                     "❌": "#ef4444"}[ikon]
             rows.append(
                 '<div class="jr-bar-row">'
                 f'<div class="jr-bar-label">Tahap {s["id"]} · {label}</div>'
@@ -242,9 +299,11 @@ def render_journey():
         "persis app live: model + lapisan aturan + sinyal penenang "
         "diterapkan bersama, bukan modelnya saja.\n\n"
         "**Gerbang klaim ditetapkan di muka** dan tidak pernah digeser "
-        "sesudah hasil terlihat, diukur pada **set hakim 300 pesan "
+        "sesudah hasil terlihat, diukur pada **set hakim lama 300 pesan "
         "Indonesia** (150 SAH / 150 SMISHING) yang tidak pernah dipakai "
-        "melatih model mana pun:\n"
+        "melatih model mana pun. Set ini dinyatakan terbakar/pensiun "
+        "sebagai hakim klaim (Protokol v1, 23 Okt 2026); hakim yang "
+        "berlaku adalah set baru ≥600 pesan, disegel sampai Fase 4:\n"
         f"- SAH lolos ≥ {_fmt_pct(gates['sah'])}\n"
         f"- SMISHING dieskalasi ≥ {_fmt_pct(gates['smishing'])}\n"
         f"- PR-AUC Inggris (UCI test) ≥ {_fmt_auc(gates['uci_pr_auc'])}\n"
@@ -253,7 +312,8 @@ def render_journey():
     st.markdown("#### Alur tahapan")
     st.markdown(_flow_html(semua), unsafe_allow_html=True)
 
-    st.markdown("#### Skor gerbang per tahap (set hakim 300, full-stack)")
+    st.markdown("#### Skor gerbang per tahap (set hakim lama 300 — "
+                "pensiun, full-stack)")
     st.markdown(_bars_html(stages, gates), unsafe_allow_html=True)
     st.caption(
         f"Gerbang: SAH ≥ {_fmt_pct(gates['sah'])} · SMISHING ≥ "

@@ -5,7 +5,7 @@ dan 2D dari file evaluasi yang sama, untuk heatmap Altair).
 
 Sumber angka (file evaluasi terverifikasi di ../id-train/):
   - Tahap 1  : eval_smoke_current.json  (paket app live: model CHOSEN +
-               rules Tahap 1, dinilai full-stack pada set hakim 300)
+               rules Tahap 1, dinilai full-stack pada set hakim lama 300 (pensiun)
   - Tahap 2C : eval_tahap2c.json        (paket fine-tune dwibahasa)
   - Tahap 2D : eval_tahap2d.json        (paket loop perbaikan 2D, epoch-1)
 
@@ -87,9 +87,9 @@ TAHAP_0 = {
         "Inggris UCI ±2011) cukup baik untuk triase SMS Indonesia, karena "
         "pola smishing dianggap bersifat lintas bahasa."),
     "metode": (
-        "Dibangun set hakim Indonesia: 300 pesan berlabel (150 SAH / 150 "
+        "Dibangun set hakim lama Indonesia: 300 pesan berlabel (150 SAH / 150 "
         "SMISHING, 20 kategori) yang tidak pernah dipakai melatih model. "
-        "Model live dinilai apa adanya pada set itu. Gerbang klaim "
+        "Model live dinilai apa adanya pada set itu. Set ini dinyatakan terbakar/pensiun sebagai hakim klaim (Protokol v1, 23 Okt 2026); hakim yang berlaku adalah set baru ≥600 pesan, disegel sampai Fase 4. Gerbang klaim "
         "ditetapkan di muka: SAH ≥ 85%, SMISHING ≥ 95%, PR-AUC UCI ≥ 0,98, "
         "smishing AUTO-CLOSE = 0."),
     "hasil": (
@@ -113,7 +113,7 @@ TAHAP_0 = {
         "t_esc 0,135."),
     "data": (
         "Data latih model: UCI SMS Spam Collection (SMS Inggris "
-        "±2011). Data nilai: set hakim Indonesia 300 pesan (150 SAH / "
+        "±2011). Data nilai: set hakim lama Indonesia 300 pesan (150 SAH / "
         "150 SMISHING, 20 kategori) yang tidak pernah dipakai melatih "
         "model mana pun."),
 }
@@ -138,13 +138,13 @@ NARASI = {
             "boleh turun tepat satu tingkat ke REVIEW ANALIS. Penenang "
             "tidak pernah mengubah skor dan gugur total bila sinyal kuat "
             "S2/S3 aktif. Paket app (model lama + rules baru) dinilai "
-            "ulang full-stack pada set hakim 300 yang sama."),
+            "ulang full-stack pada set hakim lama 300 yang sama (pensiun)."),
         "hasil": (
             "SAH 16,0% → 36,0%, SMISHING tetap 87,3%, smishing AUTO-CLOSE "
             "tetap 0 — lapisan aturan 0× salah tembak ke smishing. Total "
             "naik ke 61,7% dan panel sah 1/8 → 3/8."),
         "pelajaran": (
-            "Tambal aturan bekerja dan terbukti aman, tetapi plafonnya "
+            "Tambal aturan bekerja dan terukur aman pada set evaluasi 300 (0× salah tembak ke smishing), tetapi plafonnya "
             "rendah: 36,0% masih jauh dari gerbang SAH 85%. Ini tambal "
             "terukur, bukan obat — perbaikan sejatinya adalah fine-tune "
             "dwibahasa (Tahap 2)."),
@@ -158,7 +158,7 @@ NARASI = {
             "dengan sinyal penenang (app v4)."),
         "data": (
             "Tidak ada data latih baru. Paket dinilai ulang pada set "
-            "hakim 300 yang sama dengan Tahap 0."),
+            "hakim lama 300 yang sama (pensiun) dengan Tahap 0."),
     },
     "2c": {
         "nama": "Perakitan & penilaian paket dwibahasa",
@@ -177,7 +177,7 @@ NARASI = {
             "multilingual di-fine-tune 2 epoch di Colab T4, anggota "
             "sklearn dilatih ulang, dan ambang diturunkan dari split "
             "kalibrasi (t_close 0,2930 · t_esc 0,3516). Paket dinilai "
-            "full-stack pada set hakim 300 yang sama."),
+            "full-stack pada set hakim lama 300 yang sama (pensiun)."),
         "hasil": (
             "Lompatan besar: SAH 36,0% → 84,0%, SMISHING 87,3% → 94,7%, "
             "total 89,3%, panel 7/8 · 8/8, PR-AUC UCI 0,9862 ✅. Tetapi 3 "
@@ -205,7 +205,7 @@ NARASI = {
         "data": (
             "Data latih sama dengan 2B (UCI + korpus 2A; FIT 5.831 / "
             "KALIBRASI 816). Ambang dari split kalibrasi: t_close "
-            "0,2930 · t_esc 0,3516. Data nilai: set hakim 300 yang sama."),
+            "0,2930 · t_esc 0,3516. Data nilai: set hakim lama 300 yang sama (pensiun)."),
     },
     "2d": {
         "nama": "Loop perbaikan 2D",
@@ -217,13 +217,13 @@ NARASI = {
         "hipotesis": (
             "Menambah data latih tepat pada tiga kategori terlemah 2C — "
             "dipilih dari pola kategori, ditulis dari nol, bukan menyalin "
-            "set hakim — plus memperketat kriteria derivasi t_close "
+            "set hakim lama — plus memperketat kriteria derivasi t_close "
             "menjadi toleransi-nol akan menutup ketiga gerbang yang gagal "
             "tanpa merusak gerbang yang sudah lolos."),
         "metode": (
             "980 baris baru dari 7 keluarga templat (FIT +600; 380 baris "
             "dari 3 keluarga ditahan utuh untuk kalibrasi); gerbang "
-            "kemiripan terukur: Jaccard maksimum yang lolos vs set hakim "
+            "kemiripan terukur: Jaccard maksimum yang lolos vs set hakim lama "
             "0,50 (< 0,80). Derivasi ambang diganti ke toleransi-nol "
             "(max_missed_frac = 0,0). Checkpoint epoch-1 disimpan dan "
             "pemilihan epoch mengikuti aturan yang ditetapkan di muka — "
@@ -243,11 +243,11 @@ NARASI = {
             "smishing non-target (model-saja 94,7% → 88,0%) dan t_esc "
             "naik 0,3516 → 0,4092 sehingga 15 smishing berhenti di REVIEW "
             "alih-alih ESKALASI. Kriteria toleransi-nol terpenuhi di "
-            "kalibrasi, tetapi 2 smishing set hakim tetap lolos ke bawah "
+            "kalibrasi, tetapi 2 smishing set hakim lama tetap lolos ke bawah "
             "t_close — celah generalisasi, karena 52% kalibrasi adalah "
             "keluarga templat penahan. Harga lainnya: pesan SAH yang "
             "berhenti di REVIEW naik 23 → 47, beban analis naik. Tidak "
-            "ada satu pun angka yang digeser sesudah melihat set hakim."),
+            "ada satu pun angka yang digeser sesudah melihat set hakim lama."),
         "perlakuan": (
             "Satu loop perbaikan terukur dari 2C: data baru tepat pada "
             "kategori terlemah + kriteria derivasi t_close diganti "
@@ -262,8 +262,8 @@ NARASI = {
             "Korpus 2A ditambah 980 baris baru dari 7 keluarga templat "
             "(FIT +600; 380 baris dari 3 keluarga ditahan utuh untuk "
             "kalibrasi). Split baru FIT 6.431 / KALIBRASI 1.196. "
-            "Gerbang kemiripan vs set hakim: Jaccard maksimum yang "
-            "lolos 0,50. Data nilai: set hakim 300 yang sama."),
+            "Gerbang kemiripan vs set hakim lama: Jaccard maksimum yang "
+            "lolos 0,50. Data nilai: set hakim lama 300 yang sama (pensiun)."),
     },
 }
 
@@ -283,10 +283,10 @@ TAHAP_2A = {
         "Register resmi Indonesia bisa diajarkan lewat korpus campuran: "
         "sisa dataset publik Indonesia + keluarga templat baru yang "
         "ditulis menargetkan wilayah lemah Tahap 1 — asalkan korpus "
-        "terbukti terpisah dari set hakim."),
+        "terbukti terpisah dari set hakim lama."),
     "metode": (
         "Korpus dibangun dari dua sumber lalu disaring gerbang "
-        "anti-bocor 3 lapis terhadap set hakim: teks persis sama "
+        "anti-bocor 3 lapis terhadap set hakim lama: teks persis sama "
         "dibuang, kerangka sama (digit & domain ditopeng) dibuang, "
         "Jaccard token ≥ 0,80 dibuang. Semua nomor & domain disamarkan "
         "ke fiktif. Label publik dipetakan: penipuan → 1, promo → 1, "
@@ -296,7 +296,7 @@ TAHAP_2A = {
         "1.143; dibuang 15 persis + 11 kerangka + 20 Jaccard + 1 "
         "duplikat) + 1.416 baris templat. Komposisi hampir seimbang: "
         "1.255 positif / 1.257 negatif, 0 duplikat, QA baca acak "
-        "30/30 wajar. Jaccard maksimum yang lolos vs set hakim 0,793 "
+        "30/30 wajar. Jaccard maksimum yang lolos vs set hakim lama 0,793 "
         "(baris publik) dan 0,55 (baris templat)."),
     "pelajaran": (
         "Dataset SMS Indonesia yang publik & tersisa memang sangat "

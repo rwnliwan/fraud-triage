@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v6.1.3.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v6.1.4.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,28 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v6.1.4 (perbaikan review ronde 6 Terra — independensi
+pelabelan & kejujuran vonis, model/skor/ambang TIDAK berubah):
+(1) Siskamling: antrean pelabelan urut waktu masuk (bukan skor model);
+antrean triase terurut skor dipisah ke expander tertutup; label
+pertama dibekukan sebagai label korpus (revisi pasca-paparan saran
+hanya tercatat di label_log); vonis "HAMPIR PASTI PENIPUAN" menjadi
+"SANGAT MENCURIGAKAN — kombinasi tanda bahaya terkuat" dan
+"Kemungkinan besar aman" menjadi "Risiko rendah menurut pemeriksa";
+tinjauan kedua tanpa nilai awal + ID disembunyikan + nama peninjau
+dicatat; klaim galeri dilunakkan; alasan saran "band AMAN" menjadi
+"band RISIKO RENDAH". (2) Perjalanan Riset: _gerbang_lines memakai
+vonis tiga status Wilson (lolos jelas / tidak meyakinkan / gagal
+jelas) — 2C SAH/SMISHING kini "tidak meyakinkan", bukan ❌ — dan
+label "set hakim 300" menjadi "set hakim lama 300 — pensiun" di
+journey.py + results.json. (3) Presisi skor: laporan kasus memakai
+presisi penuh + penanda bila pembulatan 4 desimal tampak tepat di
+ambang; panel evaluasi 3 desimal menjadi 4 desimal. (4) Metrik "Kena
+aturan" kini menghitung yang benar-benar naik (raised), bukan yang
+terpicu. (5) Tiga klaim dilunakkan ke populasi pendukungnya
+("hampir mustahil", kalibrasi 42-dari-100, "terbukti aman").
+(6) Tooltip simulator t_esc: "Mencapai atau melampaui ambang ini".
 
 Baru di v6.1.3 (perbaikan review ronde 5 Terra — kejujuran penyajian,
 model/skor/ambang TIDAK berubah): (1) Siskamling tab Verifikasi kini
@@ -47,7 +69,9 @@ memicu lapisan aturan keras (>= 2 sinyal kuat); selain itu labelnya
 "POLANYA SANGAT MIRIP PENIPUAN" + anjuran verifikasi kanal resmi,
 dan band menengah/atas tanpa sinyal aturan mendapat peringatan
 khusus bahwa pemeriksa belum andal untuk pesan berformat resmi
-bank/lembaga. (2) Tab Lapor mendapat expander "Kebijakan privasi &
+bank/lembaga. (Sejak v6.1.4 label tegasnya "SANGAT MENCURIGAKAN —
+kombinasi tanda bahaya terkuat", bukan "HAMPIR PASTI PENIPUAN":
+presisi aturan keras belum terukur pada populasi mana pun.) (2) Tab Lapor mendapat expander "Kebijakan privasi &
 retensi data" (UU PDP) yang isinya diverifikasi dari kode —
 termasuk pernyataan bahwa gambar OCR hanya diproses di memori dan
 tidak pernah disimpan, serta kejujuran bahwa hak hapus saat ini
@@ -294,7 +318,7 @@ from journey import render_journey
 from siskamling import render_lapor_tab, render_gallery_tab, \
     render_admin_tab
 
-APP_VERSION = "v6.1.3"
+APP_VERSION = "v6.1.4"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -786,6 +810,7 @@ def _std_record(analysis):
         "zone_model": analysis["res"]["zone"],
         "zone_final": analysis["final_zone"],
         "rule_triggered": bool(analysis["rule"]["triggered"]),
+        "raised": bool(analysis["rule"].get("raised", False)),
         "signals": list(analysis["rule"]["active_signals"]),
         "calm_applied": bool(calm.get("lowered")),
         "calm_reasons": list(calm.get("reasons", [])),
@@ -888,6 +913,23 @@ def _export_csv(records, extra_key=None):
     return pd.DataFrame(rows).to_csv(index=False).encode("utf-8")
 
 
+def _score_boundary_note(p, t_close, t_esc):
+    """Peringatan bila skor tampil (4 desimal) membulat tepat ke ambang.
+
+    Mis. 0,13496 tampil "0.1350" tepat di t_esc padahal bandnya REVIEW
+    ANALIS (0,13496 < 0,135); 0,00996 tampil "0.0100" tepat di t_close
+    padahal bandnya AUTO-CLOSE. (Ronde 6, S3.) Kembalikan None bila
+    tidak ada pembulatan-ke-ambang."""
+    for ambang, nama in ((t_close, "t_close"), (t_esc, "t_esc")):
+        if round(p, 4) == ambang and p != ambang:
+            return (f"skor penuh {p!r} bila dibulatkan ke 4 desimal "
+                    f"tampak tepat di ambang {nama} ({ambang:.3f}), "
+                    f"padahal band diputuskan dari skor penuh "
+                    f"({p!r} {'di bawah' if p < ambang else 'di atas'} "
+                    f"{nama}).")
+    return None
+
+
 def _case_report_md(rank, r, engine):
     """Laporan per kasus (Markdown) untuk unduhan dari antrean batch — P1.
 
@@ -910,15 +952,24 @@ def _case_report_md(rank, r, engine):
         tenang = "**diterapkan** — " + "; ".join(r["calm_reasons"])
     else:
         tenang = "tidak diterapkan"
+    # Skor ditulis PRESISI PENUH (repr) — bukan 4 desimal (Ronde 6, S3):
+    # 0,13496 tampil "0.1350" tepat di t_esc padahal bandnya REVIEW.
+    boundary = _score_boundary_note(r["score"], engine.t_close,
+                                    engine.t_esc)
+    skor_line = (
+        f"- Skor model (probabilitas scam terkalibrasi): "
+        f"**{r['score']!r}** (presisi penuh — bukan 4 desimal — agar "
+        f"nilai tampil tidak tampak tepat di ambang; keputusan band "
+        f"memakai skor penuh)\n")
+    if boundary:
+        skor_line += f"- Catatan ambang: {boundary}\n"
     return (
         f"# Laporan Kasus Triase — Peringkat #{rank}\n\n"
         f"Dihasilkan dari Mode Batch Fraud Triage app {APP_VERSION} "
         f"(model operasional: Ensemble Top-3 Terkalibrasi — CHOSEN).\n\n"
         f"## Pesan\n\n> {r['text']}\n\n"
         f"## Hasil\n\n"
-        f"- Skor model (probabilitas scam terkalibrasi): "
-        f"**{r['score']:.4f}** (4 desimal; keputusan band memakai skor "
-        f"penuh sebelum pembulatan)\n"
+        + skor_line +
         f"- Ambang kebijakan: t_close = {engine.t_close:.3f} · "
         f"t_esc = {engine.t_esc:.3f}\n"
         f"- Band model: **{r['zone_model']}**\n"
@@ -1046,12 +1097,19 @@ def result_card_html(analysis, t_close, t_esc):
         model_band = (f'<div class="ft-modelband">Band menurut model: '
                       f'{res["zone"]} → Band final: {zone}</div>')
     verdict = verdict_sentence(analysis, t_close, t_esc)
+    # Penanda bila skor tampil (4 desimal) membulat tepat ke ambang
+    # (Ronde 6, S3): skor penuhnya tetap yang menentukan band.
+    boundary = _score_boundary_note(res["p_scam"], t_close, t_esc)
+    boundary_html = (
+        f'<div class="ft-modelband">⚠️ {boundary}</div>'
+        if boundary else "")
     return f"""
 <div class="ft-card" style="border-left: 6px solid {color}">
   <div class="ft-band">{icon} {name}
     <span class="ft-zone-key">— {ZONES[zone]["label_id"]}</span></div>
   <div class="ft-score">{res["p_scam"]:.4f}
-    <small>P(scam) terkalibrasi {help_icon('Peluang pesan ini smishing menurut model, sudah dikalibrasi: skor 0,42 berarti kira-kira 42 dari 100 pesan serupa benar-benar smishing pada data kalibrasi. Skor ini mengurutkan antrean triase — bukan vonis akhir.')}</small></div>
+    <small>P(scam) terkalibrasi {help_icon('Peluang pesan ini smishing menurut model, sudah dikalibrasi: skor 0,42 berarti kira-kira 42 dari 100 pesan serupa benar-benar smishing pada data kalibrasi UCI Inggris. Interpretasi peluang ini tidak berlaku begitu saja untuk pesan Indonesia, yang berada di luar distribusi kalibrasi itu. Skor ini mengurutkan antrean triase — bukan vonis akhir.')}</small></div>
+  {boundary_html}
   <div class="ft-desc">{ZONES[zone]["desc_id"]}</div>
   <div class="ft-verdict">{verdict}</div>
   {model_band}{badge}
@@ -1130,7 +1188,7 @@ with st.sidebar:
           <div class="ft-side-status">● CHOSEN · app {APP_VERSION}</div>
           <div class="ft-side-stats">
             <div class="ft-side-stat">
-              <small>t_close {help_icon('Ambang tutup otomatis: skor P(scam) di bawah nilai ini masuk AUTO-CLOSE — pesan dianggap sah tanpa eskalasi. Sengaja disetel sangat rendah supaya smishing hampir mustahil ikut tertutup.')}</small><strong>{engine.t_close:.3f}</strong>
+              <small>t_close {help_icon('Ambang tutup otomatis: skor P(scam) di bawah nilai ini masuk AUTO-CLOSE — pesan dianggap sah tanpa eskalasi. Sengaja disetel sangat rendah: pada set evaluasi 300, 0 smishing ikut tertutup — itu ukuran pada set itu saja, bukan jaminan untuk pesan di luar set itu.')}</small><strong>{engine.t_close:.3f}</strong>
             </div>
             <div class="ft-side-stat">
               <small>t_esc {help_icon('Ambang eskalasi: skor P(scam) yang mencapai nilai ini (p >= t_esc) masuk ESKALASI prioritas tinggi. Pada data validation, zona pada atau di atas ambang ini presisinya 90% atau lebih.')}</small><strong>{engine.t_esc:.3f}</strong>
@@ -1516,7 +1574,7 @@ with tab_batch:
         m2.metric("🟡 REVIEW ANALIS", counts["REVIEW ANALIS"])
         m3.metric("🔴 ESKALASI", counts["ESKALASI"])
         m4.metric("⬆️ Kena aturan",
-                  sum(1 for r in rows if r["rule_triggered"]),
+                  sum(1 for r in rows if r.get("raised")),
                   help="Jumlah pesan yang band finalnya dipaksa naik ke "
                        "ESKALASI oleh lapisan aturan (≥ 2 sinyal kuat "
                        "bersamaan), berapa pun skor modelnya.")
@@ -1626,7 +1684,7 @@ with tab_eval:
                 "Pesan": item["text"],
                 "Kategori": item["kategori"],
                 "Label harapan": item["label"],
-                "Skor": round(a["res"]["p_scam"], 3),
+                "Skor": round(a["res"]["p_scam"], 4),
                 "Band model": a["res"]["zone"],
                 "Band final": final,
                 "Aturan": ("Ya — " + "+".join(
@@ -1668,6 +1726,10 @@ with tab_eval:
             "Status": r["Status"],
         } for r in eval_rows])
         st.dataframe(df_eval, hide_index=True)
+        st.caption(
+            "Skor tampil 4 desimal; keputusan band memakai skor penuh — "
+            "skor yang membulat ke ambang tidak berarti menyentuh "
+            "ambang. (Ronde 6, S4.)")
         concl = [
             f"**Kesimpulan otomatis (dari angka di atas, apa "
             f"adanya):** {tot_ok} dari {len(eval_rows)} band final "
@@ -1757,7 +1819,7 @@ with tab_eval:
                 step=0.005,
                 format="%.3f",
                 key="sim_t_esc",
-                help="Di atas ambang ini band model menjadi ESKALASI.",
+                help="Mencapai atau melampaui ambang ini band model menjadi ESKALASI.",
             )
 
             if sim_close >= sim_esc:

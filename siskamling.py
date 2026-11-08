@@ -33,13 +33,36 @@ reports.enrichment (info pendukung verifikasi, bukan penentu label).
 label_log (jejak audit label) + tinjauan kedua buta atas sampel acak
 terverifikasi — yang cocok menjadi "subset emas" (tampil di Analitik).
 
+Baru di v6.1.4 (perbaikan review ronde 6 Terra — independensi
+pelabelan & kejujuran vonis; model/skor/ambang TIDAK berubah):
+(1) Antrean pelabelan kini urut waktu masuk (created_at), BUKAN skor
+model — urutan skor adalah sinyal ordinal yang membocorkan risiko
+sebelum pelabelan. Antrean triase terurut skor tetap ada sebagai
+expander terpisah yang tertutup + berperingatan, tanpa teks dan tanpa
+tombol label. (2) Label pertama DIBEKUKAN sebagai label korpus:
+unverify_report tidak lagi menghapus label (label = NULL, perilaku
+lama); verifikasi ulang sesudah saran mesin terlihat hanya mencatat
+revisi terpisah di label_log ('revisi_pasca_paparan') tanpa menimpa
+label korpus — efektif sampai ekspor karena view corpus_export
+membaca reports.label pada baris status='verified'. (3) Vonis warga
+"HAMPIR PASTI PENIPUAN" diganti "SANGAT MENCURIGAKAN — kombinasi
+tanda bahaya terkuat" (presisi aturan keras belum terukur) dan
+"Kemungkinan besar aman" diganti "Risiko rendah menurut pemeriksa".
+(4) Tinjauan kedua: pilihan label tanpa nilai awal (index=None),
+ID/tanggal/kanal disembunyikan agar tak bisa dicocokkan ke daftar
+terverifikasi, nama peninjau kedua dicatat di jejak audit. (5) Klaim
+galeri dilunakkan: nama bebas masih bisa lolos dari scrub otomatis;
+perlindungan nyata adalah tinjauan manusia. (6) Alasan saran "band
+AMAN" menjadi "band RISIKO RENDAH" (nilai simpan DB tetap "AMAN").
+
 Baru di v6.1.0 (tindak lanjut kritik eksternal atas laporan v3.2):
-(1) label vonis warga "HAMPIR PASTI PENIPUAN" hanya tampil bila
-lapisan aturan keras terpicu — band ESKALASI dari skor model saja
-memakai label yang dilunakkan ("polanya sangat mirip penipuan") plus
-peringatan khusus pesan berformat resmi untuk band menengah/atas
-tanpa sinyal aturan; (2) expander "Kebijakan privasi & retensi data"
-di tab Lapor (PRIVACY_TEXT_V1) — isinya diverifikasi dari kode:
+(1) label vonis warga tegas hanya tampil bila lapisan aturan keras
+terpicu — band ESKALASI dari skor model saja memakai label yang
+dilunakkan ("polanya sangat mirip penipuan") plus peringatan khusus
+pesan berformat resmi untuk band menengah/atas tanpa sinyal aturan
+(sejak v6.1.4 label tegasnya "SANGAT MENCURIGAKAN — kombinasi tanda
+bahaya terkuat", bukan "HAMPIR PASTI PENIPUAN"); (2) expander
+"Kebijakan privasi & retensi data" di tab Lapor (PRIVACY_TEXT_V1) — isinya diverifikasi dari kode:
 gambar OCR hanya diproses di memori dan tidak pernah disimpan,
 hak hapus saat ini berupa penandaan status (dinyatakan apa adanya).
 
@@ -683,19 +706,21 @@ def fetch_second_review_sample(cfg: dict, limit: int = 3) -> list:
         return []
 
 
-def second_review(cfg: dict, report_id: int, label: str) -> str:
+def second_review(cfg: dict, report_id: int, label: str,
+                  actor: str = "verifikator-2") -> str:
     """Catat tinjauan kedua atas satu laporan terverifikasi.
 
     Kembalikan 'cocok' (label sama -> masuk subset emas), 'beda'
     (dicatat sebagai perbedaan; label asli TIDAK diubah — mengubah
     label adalah keputusan peninjau utama), atau 'hilang' (baris
-    tidak lagi terverifikasi)."""
+    tidak lagi terverifikasi). `actor` dicatat di label_log supaya
+    peninjau pertama dan kedua bisa dibedakan (Ronde 6, S5)."""
     rows = turso_execute(
         cfg, "SELECT label FROM reports WHERE id = ? "
              "AND status = 'verified'", [int(report_id)])
     if not rows:
         return "hilang"
-    _log_label(cfg, report_id, "tinjauan_kedua", label)
+    _log_label(cfg, report_id, "tinjauan_kedua", label, actor=actor)
     return "cocok" if rows[0]["label"] == label else "beda"
 
 
@@ -856,13 +881,16 @@ def render_citizen_verdict(analysis: dict) -> None:
     detail teknis (skor, sinyal) tersedia di expander sesudahnya.
 
     v6.1.0 (tindak lanjut kritik eksternal atas laporan v3.2, butir
-    2.5): label tegas "HAMPIR PASTI PENIPUAN" kini HANYA tampil bila
-    lapisan aturan keras benar-benar terpicu (>= 2 sinyal kuat S1/S2/
-    S3). Bila band ESKALASI datang dari skor model saja, labelnya
-    dilunakkan — skor mesin bukan vonis pasti — dan untuk band
-    menengah/atas tanpa sinyal aturan ditambah peringatan khusus
-    pesan berformat resmi (model paling sering salah justru pada
-    pesan resmi bank/lembaga). Skor, ambang, dan band TIDAK berubah;
+    2.5): label tegas kini HANYA tampil bila lapisan aturan keras
+    benar-benar terpicu (>= 2 sinyal kuat S1/S2/S3). Bila band
+    ESKALASI datang dari skor model saja, labelnya dilunakkan — skor
+    mesin bukan vonis pasti — dan untuk band menengah/atas tanpa
+    sinyal aturan ditambah peringatan khusus pesan berformat resmi
+    (model paling sering salah justru pada pesan resmi bank/lembaga).
+    Sejak v6.1.4 label tegasnya "SANGAT MENCURIGAKAN — kombinasi
+    tanda bahaya terkuat", bukan "HAMPIR PASTI PENIPUAN": jumlah
+    sinyal bukan ukuran presisi — presisi aturan keras belum diukur
+    pada populasi mana pun. Skor, ambang, dan band TIDAK berubah;
     yang berubah hanya bahasanya.
     """
     zone = analysis["final_zone"]
@@ -873,10 +901,13 @@ def render_citizen_verdict(analysis: dict) -> None:
     if zone == "ESKALASI":
         if hard_fired:
             st.error(
-                "🔴 **HAMPIR PASTI PENIPUAN.** Pesan ini memuat "
-                "kombinasi tanda bahaya terkuat (lihat tanda bahaya "
-                "di bawah). Jangan klik tautan apa pun di pesan ini "
-                "dan jangan membalasnya.")
+                "🔴 **SANGAT MENCURIGAKAN — kombinasi tanda bahaya "
+                "terkuat.** Pesan ini memuat kombinasi tanda bahaya "
+                "terkuat (lihat tanda bahaya di bawah). Jumlah sinyal "
+                "bukan ukuran presisi — aturan keras ini belum diukur "
+                "presisinya pada populasi mana pun — jadi verifikasi "
+                "lewat kanal resmi sebelum bertindak. Jangan klik "
+                "tautan apa pun di pesan ini dan jangan membalasnya.")
         else:
             st.error(
                 "🔴 **POLANYA SANGAT MIRIP PENIPUAN.** Penilaian "
@@ -907,8 +938,8 @@ def render_citizen_verdict(analysis: dict) -> None:
             "yang ada di pesan.")
     else:
         st.success(
-            "🟢 **Kemungkinan besar aman.** Tidak ditemukan tanda "
-            "penipuan yang kuat pada pesan ini.")
+            "🟢 **Risiko rendah menurut pemeriksa.** Tidak ditemukan "
+            "tanda penipuan yang kuat pada pesan ini.")
         st.markdown(
             "Tetap waspada: ini penilaian otomatis, **bukan jaminan**. "
             "Jangan kirim uang atau kode hanya karena sebuah pesan "
@@ -1306,9 +1337,11 @@ def render_gallery_tab() -> None:
     st.markdown("### 🖼️ Galeri Modus Penipuan")
     st.markdown(
         "Modus-modus yang **sudah diverifikasi** dari laporan warga. "
-        "Semua teks tampil **tanpa nama dan tanpa data pribadi** "
-        "(dibersihkan otomatis), agar Anda bisa mengenali polanya "
-        "sebelum jadi korban berikutnya.")
+        "Teks sudah dibersihkan otomatis dari nomor/email/tautan dan "
+        "ditinjau manusia sebelum tayang — tetapi nama bebas masih "
+        "bisa lolos dari pembersih otomatis, jadi laporkan kepada "
+        "pengelola bila Anda mengenali data pribadi di galeri. "
+        "Kenali polanya sebelum jadi korban berikutnya.")
     cfg = load_config()
     if not (cfg.get("url") and cfg.get("token")):
         st.info("Galeri belum aktif pada deployment ini (basis data "
@@ -1362,7 +1395,7 @@ def render_gallery_tab() -> None:
 # Pembagian kerja yang disepakati desain Fase 0: LABEL HANYA DITENTUKAN
 # MANUSIA — dan sejak v6.1.3 secara BUTA. Model ensemble sudah menilai
 # tiap laporan saat masuk (skor, band, sinyal), tetapi saran itu TIDAK
-# tampil di antrean pending: peninjau membaca teksnya dulu, memilih
+# tampil di antrean pelabelan: peninjau membaca teksnya dulu, memilih
 # label + kategori sendiri (tanpa nilai awal), baru menyimpan. Saran
 # mesin baru tampil di daftar terverifikasi, sebagai pembanding
 # pasca-label. Alasannya sama seperti dulu — memakai model sebagai
@@ -1370,9 +1403,28 @@ def render_gallery_tab() -> None:
 # berisi penilaian manusia yang independen, bukan pendapat model
 # tentang datanya sendiri — dan saran yang dilihat SEBELUM memberi
 # label sudah menggeser penilaian itu (anchoring), walau labelnya
-# "tetap di tangan manusia". Antrean tetap terurut skor tertinggi
-# dulu (fungsi triase antrean), tetapi skor/band/sinyal per laporan
-# tidak ditampilkan sebelum pelabelan. (Ronde 5, M1.)
+# "tetap di tangan manusia".
+#
+# Sejak v6.1.4 (Ronde 6, M1) antrean pelabelan TIDAK LAGI terurut skor:
+# urutan skor tertinggi dulu — yang dipakai v6.1.3 dengan komentar
+# "fungsi triase antrean" — adalah kebocoran ordinal: posisi relatif
+# saja sudah memberi tahu peninjau laporan mana yang dinilai model
+# paling berisiko, tanpa satu angka pun tampil. Antrean pelabelan
+# kini urut waktu masuk (created_at ASC, tanpa sinyal model apa pun);
+# antrean triase terurut skor (fetch_pending_triage) tetap ada untuk
+# perencanaan kapasitas, tetapi tampil terpisah di expander tertutup
+# + berperingatan, tanpa teks dan tanpa tombol label — bukan untuk
+# memilih urutan pelabelan.
+#
+# Sejak v6.1.4 (Ronde 6, M2) label pertama DIBEKUKAN: unverify_report
+# tidak lagi menghapus label, dan verify_report tidak menimpa label
+# pertama bila laporan pernah diverifikasi sebelumnya — revisi
+# pasca-paparan saran mesin hanya dicatat terpisah di label_log
+# ('revisi_pasca_paparan'). Efektif sampai ekspor: view corpus_export
+# (definisi di migrasi Turso, bukan di repo ini — diverifikasi
+# 2026-11-08 dari sqlite_master live) membaca reports.label pada
+# baris status='verified' + consent, jadi label korpus = label
+# pertama selama kolom itu tak pernah ditulis ulang.
 # ---------------------------------------------------------------------------
 LABELS = ["SMISHING", "SAH", "SPAM_PROMO"]
 CATEGORIES = ["blokir_akun", "otp_palsu", "resi_paket", "undian", "apk",
@@ -1425,7 +1477,7 @@ def suggest_label(row: dict) -> tuple[str, str, str]:
             alasan += f" + sinyal kuat {'+'.join(strong)}"
         return "SMISHING", alasan, "kuat"
     if band == "AMAN" and not strong:
-        return "SAH", "band AMAN (risiko rendah menurut model), tanpa sinyal kuat", "kuat"
+        return "SAH", "band RISIKO RENDAH (risiko rendah menurut model), tanpa sinyal kuat", "kuat"
     text = (row.get("text_scrubbed") or "").lower()
     if any(w in text for w in _PROMO_WORDS):
         return "SPAM_PROMO", "pola promosi pada zona abu-abu", "lemah"
@@ -1443,7 +1495,28 @@ def suggest_category(row: dict) -> str:
 
 
 def fetch_pending(cfg: dict, limit: int = 50) -> list:
-    """Antrean verifikasi: skor tertinggi dulu (triase risiko)."""
+    """Antrean PELABELAN: urut waktu masuk (created_at ASC).
+
+    Sengaja TANPA sinyal model apa pun — bukan skor, bukan band,
+    bukan urutan skor (Ronde 6, M1). Urutan skor tertinggi dulu
+    adalah sinyal ordinal: peninjau belajar laporan mana yang dinilai
+    model paling berisiko hanya dari posisinya. Antrean triase
+    terurut skor ada terpisah (fetch_pending_triage) untuk
+    perencanaan kapasitas — bukan untuk pelabelan."""
+    return turso_execute(
+        cfg,
+        "SELECT * FROM reports WHERE status = 'pending' "
+        "ORDER BY created_at ASC, id ASC LIMIT ?",
+        [int(limit)])
+
+
+def fetch_pending_triage(cfg: dict, limit: int = 50) -> list:
+    """Antrean TRIASE operasional: skor model tertinggi dulu.
+
+    Hanya untuk perencanaan kapasitas (berapa laporan berisiko
+    menunggu) — tampil di expander tertutup + berperingatan, tanpa
+    teks dan tanpa tombol label. JANGAN dipakai untuk memilih urutan
+    pelabelan: urutan ini sendiri adalah sinyal mesin (Ronde 6, M1)."""
     return turso_execute(
         cfg,
         "SELECT * FROM reports WHERE status = 'pending' "
@@ -1493,8 +1566,66 @@ def duplicate_text_count(cfg: dict, row: dict) -> int:
         [row["text_scrubbed"], int(row["id"])])[0]["n"]
 
 
+def frozen_label(cfg: dict, report_id: int) -> str | None:
+    """Label PERTAMA yang pernah diverifikasi untuk laporan ini.
+
+    Dibaca dari label_log (aksi 'verifikasi' paling awal, ORDER BY
+    id) — bukan dari reports.label — supaya label pertama tetap
+    ditemukan walau barisnya pernah dikembalikan ke antrean dengan
+    perilaku lama (label = NULL). None bila laporan belum pernah
+    diverifikasi. (Ronde 6, M2.)"""
+    try:
+        rows = turso_execute(
+            cfg,
+            "SELECT label FROM label_log WHERE report_id = ? "
+            "AND aksi = 'verifikasi' ORDER BY id ASC LIMIT 1",
+            [int(report_id)])
+    except Exception:
+        return None
+    return rows[0]["label"] if rows else None
+
+
 def verify_report(cfg: dict, report_id: int, label: str, category: str,
-                  gallery_visible: bool) -> None:
+                  gallery_visible: bool) -> str:
+    """Verifikasi laporan; kembalikan label yang menjadi label korpus.
+
+    LABEL PERTAMA DIBEKUKAN (Ronde 6, M2): label yang pertama kali
+    diverifikasi adalah label korpus selamanya. Bila laporan ini
+    pernah diverifikasi sebelumnya (mis. dikembalikan ke antrean
+    sesudah saran mesin terlihat di daftar terverifikasi), label baru
+    TIDAK menimpa label pertama: ia dicatat terpisah di label_log
+    sebagai 'revisi_pasca_paparan' lengkap dengan nilai barunya, dan
+    label korpus tetap label pertama. Efektif sampai ke ekspor: view
+    corpus_export membaca reports.label pada baris status='verified'
+    — dan kolom itu tidak pernah ditulis ulang sesudah verifikasi
+    pertama. Kategori/galeri masih boleh berubah (bukan label)."""
+    first = frozen_label(cfg, report_id)
+    if first is None:
+        # Pengaman kedua: label yang masih tersimpan di barisnya
+        # sendiri (laporan yang dikembalikan pasca-v6.1.4 membawa
+        # label pertamanya di kolom label).
+        try:
+            rows = turso_execute(
+                cfg, "SELECT label FROM reports WHERE id = ?",
+                [int(report_id)])
+            first = rows[0]["label"] if rows else None
+        except Exception:
+            first = None
+    if first is not None:
+        # Tulis kembali label beku ke kolomnya juga: baris warisan yang
+        # dikembalikan dengan perilaku lama (label = NULL) harus
+        # mendapatkan kembali label pertamanya — bila tidak, view
+        # corpus_export (label IS NOT NULL) akan kehilangan baris itu.
+        turso_execute(
+            cfg,
+            "UPDATE reports SET status = 'verified', label = ?, "
+            "category_modus = ?, gallery_visible = ?, "
+            "verified_at = datetime('now') WHERE id = ? "
+            "AND status = 'pending'",
+            [first, category, 1 if gallery_visible else 0,
+             int(report_id)])
+        _log_label(cfg, report_id, "revisi_pasca_paparan", label)
+        return first
     turso_execute(
         cfg,
         "UPDATE reports SET status = 'verified', label = ?, "
@@ -1502,6 +1633,7 @@ def verify_report(cfg: dict, report_id: int, label: str, category: str,
         "verified_at = datetime('now') WHERE id = ? AND status = 'pending'",
         [label, category, 1 if gallery_visible else 0, int(report_id)])
     _log_label(cfg, report_id, "verifikasi", label)
+    return label
 
 
 def reject_report(cfg: dict, report_id: int) -> None:
@@ -1524,13 +1656,29 @@ def delete_report(cfg: dict, report_id: int) -> None:
 
 
 def unverify_report(cfg: dict, report_id: int) -> None:
+    """Kembalikan laporan terverifikasi ke antrean pending.
+
+    Label TIDAK dihapus (Ronde 6, M2): label pertama dibekukan
+    sebagai label korpus — menghapusnya (label = NULL, perilaku lama)
+    membuat label kedua yang diberi sesudah saran mesin terlihat
+    menjadi label korpus. Baris kembali pending dengan label
+    pertamanya tetap tersimpan (tidak tampil di kartu pending);
+    verifikasi ulang tidak menimpa label itu — revisinya dicatat
+    terpisah di label_log ('revisi_pasca_paparan')."""
+    try:
+        rows = turso_execute(
+            cfg, "SELECT label FROM reports WHERE id = ? "
+                 "AND status = 'verified'", [int(report_id)])
+        label = rows[0]["label"] if rows else None
+    except Exception:
+        label = None
     turso_execute(
         cfg,
-        "UPDATE reports SET status = 'pending', label = NULL, "
+        "UPDATE reports SET status = 'pending', "
         "verified_at = NULL, gallery_visible = 0 "
         "WHERE id = ? AND status = 'verified'",
         [int(report_id)])
-    _log_label(cfg, report_id, "kembalikan")
+    _log_label(cfg, report_id, "kembalikan", label)
 
 
 def set_gallery_visible(cfg: dict, report_id: int, visible: bool) -> None:
@@ -1684,8 +1832,15 @@ def render_admin_tab() -> None:
         "buta**: saran mesin (skor, band, sinyal) disembunyikan sampai "
         "label tersimpan — baca teksnya dulu, putuskan sendiri, baru "
         "saran mesin tampil sebagai pembanding di daftar terverifikasi. "
-        "Laporan terverifikasi + consent masuk korpus data latih; yang "
-        "ditandai tampil galeri muncul di Galeri Modus publik.")
+        "Antrean pelabelan di bawah urut waktu masuk (tanpa sinyal "
+        "model); antrean triase terurut skor ada terpisah di expander "
+        "tertutup dan bukan untuk pelabelan. Label pertama yang "
+        "tersimpan **dibekukan** sebagai label korpus — bila laporan "
+        "dikembalikan ke antrean lalu diverifikasi ulang, label korpus "
+        "tetap label pertama dan revisinya hanya dicatat di jejak "
+        "audit. Laporan terverifikasi + consent masuk korpus data "
+        "latih; yang ditandai tampil galeri muncul di Galeri Modus "
+        "publik.")
     cfg = load_config()
     if not (cfg.get("url") and cfg.get("token")):
         st.warning("Basis data belum terhubung pada deployment ini.")
@@ -1761,20 +1916,37 @@ def render_admin_tab() -> None:
                     "tanpa CAPTCHA.")
     _render_analytics(cfg)
 
-    st.markdown("#### Antrean pending — risiko tertinggi di atas")
+    st.markdown("#### Antrean pelabelan — urutan waktu masuk "
+                "(tanpa sinyal model)")
+    st.caption(
+        "Antrean ini urut waktu masuk (paling lama menunggu di atas) — "
+        "bukan urut skor model. Urutan skor adalah sinyal mesin, jadi "
+        "tidak dipakai di sini. Antrean triase terurut skor ada "
+        "terpisah di bawah (expander tertutup) untuk perencanaan "
+        "kapasitas saja.")
     if not pending:
         st.info("Antrean kosong. Tidak ada laporan menunggu verifikasi.")
-    # Pelabelan BUTA (Ronde 5, M1): kartu pending TIDAK menampilkan
-    # skor, band, sinyal, atau saran mesin apa pun — dan pilihan
-    # label/kategori TANPA nilai awal (index=None + placeholder),
-    # supaya tidak ada jangkar dari model sebelum peninjau memutuskan
-    # sendiri dari teksnya. Saran baru dihitung & ditampilkan di daftar
-    # terverifikasi di bawah, sesudah label tersimpan.
+    # Pelabelan BUTA (Ronde 5, M1; diperkuat Ronde 6, M1): kartu pending
+    # TIDAK menampilkan skor, band, sinyal, atau saran mesin apa pun —
+    # dan pilihan label/kategori TANPA nilai awal (index=None +
+    # placeholder), supaya tidak ada jangkar dari model sebelum
+    # peninjau memutuskan sendiri dari teksnya. Antreannya pun kini
+    # urut waktu masuk, bukan skor (urutan skor = sinyal ordinal).
+    # Saran baru dihitung & ditampilkan di daftar terverifikasi di
+    # bawah, sesudah label tersimpan.
     for r in pending:
         with st.container(border=True):
             st.markdown(f"**Laporan #{r['id']}**")
             st.markdown(f"> {r['text_scrubbed']}")
             st.caption(_report_meta(cfg, r))
+            if r.get("label"):
+                st.caption(
+                    "⚠️ Laporan ini pernah terverifikasi sebelumnya — "
+                    "label pertamanya sudah DIBEKUKAN sebagai label "
+                    "korpus dan nilainya tidak tampil di sini. Bila "
+                    "Anda memberi label berbeda sekarang, perbedaan itu "
+                    "hanya dicatat terpisah di jejak audit; label "
+                    "korpus tidak berubah.")
             enr = enrichment_summary(r.get("enrichment"))
             if enr:
                 st.caption(
@@ -1802,10 +1974,19 @@ def render_admin_tab() -> None:
                     st.warning("Pilih label dan kategori dulu sebelum "
                                "menyimpan verifikasi.")
                 else:
-                    verify_report(cfg, r["id"], label, category,
-                                  gallery)
-                    st.success(f"Laporan #{r['id']} terverifikasi "
-                               f"sebagai {label}.")
+                    eff_label = verify_report(cfg, r["id"], label,
+                                              category, gallery)
+                    if eff_label != label:
+                        st.success(
+                            f"Laporan #{r['id']} terverifikasi kembali "
+                            "— label korpus tetap label pertama "
+                            "(dibekukan); label "
+                            f"{label} yang Anda beri dicatat terpisah "
+                            "sebagai revisi pasca-paparan di jejak "
+                            "audit.")
+                    else:
+                        st.success(f"Laporan #{r['id']} terverifikasi "
+                                   f"sebagai {label}.")
                     st.rerun()
             if b2.button("❌ Tolak", key=f"adm_reject_{r['id']}"):
                 reject_report(cfg, r["id"])
@@ -1816,6 +1997,33 @@ def render_admin_tab() -> None:
                 st.success(f"Laporan #{r['id']} dihapus (status "
                            f"deleted).")
                 st.rerun()
+
+    # Antrean triase (Ronde 6, M1) — terpisah dari antrean pelabelan.
+    # Tertutup + berperingatan: urutan skor adalah sinyal mesin, jadi
+    # expander ini HANYA untuk perencanaan kapasitas (berapa laporan
+    # berisiko menunggu), tanpa teks dan tanpa tombol label. Jangan
+    # dibuka sebelum selesai melabeli dari antrean di atas.
+    with st.expander("📊 Antrean triase (opsional) — urutan skor model, "
+                     "BUKAN untuk pelabelan"):
+        st.caption(
+            "⚠️ Antrean ini diurutkan skor model tertinggi dulu — "
+            "urutannya sendiri adalah sinyal mesin. JANGAN membukanya "
+            "sebelum selesai melabeli dari antrean pelabelan di atas; "
+            "antrean ini hanya untuk perencanaan kapasitas, bukan "
+            "untuk memilih urutan pelabelan. Tanpa teks, tanpa tombol "
+            "label.")
+        try:
+            triage = fetch_pending_triage(cfg)
+        except Exception as exc:
+            st.caption(f"Antrean triase belum bisa dimuat: {exc}")
+            triage = []
+        if not triage:
+            st.caption("Tidak ada laporan pending.")
+        for t in triage:
+            st.caption(
+                f"#{t['id']} · submit {fmt_wita(t['created_at'])} · "
+                "band model: "
+                f"{BAND_BADGE.get(t.get('model_band'), t.get('model_band') or '-')}")
 
     st.markdown("#### Terverifikasi terakhir")
     if not verified:
@@ -1865,31 +2073,56 @@ def render_admin_tab() -> None:
     # (buta): yang hasilnya sama masuk SUBSET EMAS; yang berbeda hanya
     # DICATAT di label_log — label asli tidak berubah oleh tinjauan
     # kedua, mengubahnya keputusan peninjau utama.
+    # Ronde 6, S5: pilihan label TANPA nilai awal (index=None —
+    # sebelumnya default LABELS[0] = SMISHING, jangkar bawaan);
+    # ID/tanggal/kanal disembunyikan agar sampel tak bisa dicocokkan
+    # ke daftar terverifikasi di atas; nama peninjau kedua dicatat di
+    # jejak audit supaya peninjau pertama dan kedua bisa dibedakan.
+    # Sisa batasan yang jujur: teks yang sama juga tampil di daftar
+    # terverifikasi, jadi pencocokan lewat teks masih mungkin —
+    # tinjauan kedua sebaiknya dilakukan peninjau yang berbeda dari
+    # peninjau pertama.
     st.markdown("#### 🥇 Subset emas — tinjauan kedua")
     st.caption(
         f"Subset emas saat ini: **{gold_count(cfg)}** laporan. "
         "Nilai ulang sampel acak di bawah ini dari teksnya saja — "
         "label tercatat sengaja tidak ditampilkan. Setiap tinjauan "
-        "tercatat di jejak audit (label_log).")
+        "tercatat di jejak audit (label_log). Teks yang sama juga "
+        "tampil di daftar terverifikasi di atas, jadi pencocokan "
+        "lewat teks masih mungkin — sebaiknya peninjau kedua adalah "
+        "orang yang berbeda dari peninjau pertama.")
+    reviewer2 = st.text_input(
+        "Nama/inisial peninjau kedua (opsional — dicatat di jejak "
+        "audit; isi dengan nama berbeda dari peninjau pertama bila "
+        "memungkinkan)",
+        key="adm_second_actor")
     sample = fetch_second_review_sample(cfg, 3)
     if not sample:
         st.caption("Tidak ada sampel menunggu tinjauan kedua "
                    "(semua terverifikasi sudah ditinjau, atau belum "
                    "ada yang terverifikasi).")
-    for r in sample:
+    for i, r in enumerate(sample):
         with st.container(border=True):
             st.markdown(
-                f"**Laporan #{r['id']}** · submit "
-                f"{fmt_wita(r['created_at'])} · kanal "
-                f"{CHANNELS.get(r['channel'], r['channel'])}")
+                f"**Sampel tinjauan kedua #{i + 1}** · ID, tanggal, "
+                "dan kanal disembunyikan agar sampel tidak bisa "
+                "dicocokkan dengan daftar terverifikasi di atas.")
             st.markdown(f"> {r['text_scrubbed']}")
             sc1, sc2 = st.columns([2, 1])
             lab2 = sc1.selectbox(
                 "Label menurut penilaianmu (tinjauan kedua)", LABELS,
+                index=None, placeholder="— pilih label —",
                 key=f"adm_second_{r['id']}")
             if sc2.button("✔️ Catat tinjauan kedua",
                           key=f"adm_second_btn_{r['id']}"):
-                hasil = second_review(cfg, r["id"], lab2)
+                if lab2 is None:
+                    st.warning("Pilih label dulu sebelum mencatat "
+                               "tinjauan kedua.")
+                    continue
+                hasil = second_review(
+                    cfg, r["id"], lab2,
+                    actor=(reviewer2 or "").strip()
+                    or "verifikator-2")
                 if hasil == "cocok":
                     st.success(
                         f"Laporan #{r['id']}: tinjauan kedua COCOK "
