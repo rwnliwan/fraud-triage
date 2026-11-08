@@ -81,7 +81,8 @@ ZONES = {
     },
     "ESKALASI": {
         "label_id": "Eskalasi — Prioritas Tinggi (ESKALASI)",
-        "desc_id": ("Skor di atas t_esc: presisi zona ini >= 90% di validation; "
+        "desc_id": ("Skor mencapai t_esc (p >= t_esc): presisi zona ini "
+                    ">= 90% di validation; "
                     "tangani sebagai dugaan scam kuat, dahulukan."),
     },
 }

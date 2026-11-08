@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fraud Triage — konsol triase smishing (Streamlit), versi v6.1.2.
+"""Fraud Triage — konsol triase smishing (Streamlit), versi v6.1.3.
 
 Menjalankan model CHOSEN proyek Fraud Triage: Ensemble (Top-3 Terkalibrasi)
 dengan kebijakan dua ambang t_close=0,010 / t_esc=0,135 (Bagian 10 notebook),
@@ -7,6 +7,23 @@ dilengkapi LAPISAN ATURAN (rules.py): kombinasi >= 2 sinyal kuat memaksa
 band naik ke ESKALASI — aturan tidak pernah mengubah skor. Logika model
 ada di triage_core.py, logika aturan di rules.py; keduanya bisa diuji
 tanpa Streamlit.
+
+Baru di v6.1.3 (perbaikan review ronde 5 Terra — kejujuran penyajian,
+model/skor/ambang TIDAK berubah): (1) Siskamling tab Verifikasi kini
+pelabelan buta — saran mesin (skor, band, sinyal, label/kategori saran)
+disembunyikan sampai label manusia disimpan, dan pilihan label/kategori
+tidak lagi terisi otomatis dari saran; saran baru tampil di daftar
+terverifikasi sebagai pembanding pasca-label. (2) Ekspor CSV log koreksi
+kini memuat kolom "Band koreksi pengguna" (bug `tuple in dict`). (3)
+Label "AMAN" dilunakkan menjadi "RISIKO RENDAH" (risiko rendah menurut
+model, bukan jaminan aman). (4) Skor tampil 4 desimal (CSV: presisi
+penuh) agar nilai tampil tidak tampak melanggar ambang; keputusan band
+tetap memakai skor penuh. (5) Wording ambang diselaraskan ke
+implementasi `p >= t_esc` ("mencapai atau melampaui", bukan "di atas").
+(6) Label "PR-AUC test" menjadi "PR-AUC UCI Inggris". (7) Nomor komentar
+tab diselaraskan ke urutan tab aktual di UI. Perubahan di app.py,
+triage_core.py, siskamling.py + wording sel derivasi notebook v1 —
+termuat pada reboot berikutnya.
 
 Baru di v6.1.2 (tautan LinkedIn pembuat): sidebar "Tautan &
 sumber" dan footer kini memuat tautan LinkedIn Septian Panjaya di
@@ -277,7 +294,7 @@ from journey import render_journey
 from siskamling import render_lapor_tab, render_gallery_tab, \
     render_admin_tab
 
-APP_VERSION = "v6.1.2"
+APP_VERSION = "v6.1.3"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -559,9 +576,12 @@ BENCHMARK = [
     ("TF-IDF + Gradient Boosting", 0.933, 0.863, 0.010),
 ]
 
-# Tampilan band final: nama ramah + warna kartu.
+# Tampilan band final: nama ramah + warna kartu. "RISIKO RENDAH" (bukan
+# "AMAN"): skor rendah berarti risiko rendah menurut model, bukan
+# pembuktian pesan aman — model live hanya benar 16,0% pada pesan SAH
+# Indonesia di baseline. (Ronde 5, S2.)
 ZONE_DISPLAY = {
-    "AUTO-CLOSE": ("AMAN", "🟢", "#22c55e"),
+    "AUTO-CLOSE": ("RISIKO RENDAH", "🟢", "#22c55e"),
     "REVIEW ANALIS": ("REVIEW ANALIS", "🟡", "#eab308"),
     "ESKALASI": ("ESKALASI", "🔴", "#ef4444"),
 }
@@ -840,13 +860,18 @@ def _export_csv(records, extra_key=None):
     Kolom: Teks (dipotong aman), Skor, Band model, Band final,
     Aturan terpicu, Sinyal aktif (+ kolom ekstra bila diminta,
     mis. band koreksi pengguna pada log koreksi).
+
+    Skor ditulis presisi penuh (tanpa pembulatan) agar nilai di CSV
+    tidak tampak melanggar ambang padahal keputusan band memakai skor
+    penuh — pembulatan 3 desimal pernah membuat 0,1346 tampil 0,135
+    di samping ambang 0,135. (Ronde 5, S3.)
     """
     import pandas as pd  # malas: hanya untuk ekspor CSV & tabel hasil
     rows = []
     for r in records:
         row = {
             "Teks": _short(r["text"], CSV_TEXT_CHARS),
-            "Skor": round(r["score"], 3),
+            "Skor": r["score"],
             "Band model": r["zone_model"],
             "Band final": r["zone_final"],
             "Aturan terpicu": "Ya" if r["rule_triggered"] else "Tidak",
@@ -854,7 +879,10 @@ def _export_csv(records, extra_key=None):
             "Sinyal penenang": ("Ya — " + "; ".join(r["calm_reasons"]))
             if r.get("calm_applied") else "Tidak",
         }
-        if extra_key and extra_key in r:
+        # `extra_key` adalah tuple (nama_kolom, kunci_rekaman): uji
+        # keanggotaan KUNCI rekamannya, bukan tuplenya — `tuple in dict`
+        # selalu False dan kolom ekstra hilang diam-diam. (Ronde 5, S1.)
+        if extra_key and extra_key[1] in r:
             row[extra_key[0]] = r[extra_key[1]]
         rows.append(row)
     return pd.DataFrame(rows).to_csv(index=False).encode("utf-8")
@@ -889,7 +917,8 @@ def _case_report_md(rank, r, engine):
         f"## Pesan\n\n> {r['text']}\n\n"
         f"## Hasil\n\n"
         f"- Skor model (probabilitas scam terkalibrasi): "
-        f"**{r['score']:.3f}**\n"
+        f"**{r['score']:.4f}** (4 desimal; keputusan band memakai skor "
+        f"penuh sebelum pembulatan)\n"
         f"- Ambang kebijakan: t_close = {engine.t_close:.3f} · "
         f"t_esc = {engine.t_esc:.3f}\n"
         f"- Band model: **{r['zone_model']}**\n"
@@ -931,7 +960,7 @@ def score_bar_html(p, t_close, t_esc):
     <div class="ft-seg-close"></div><div class="ft-seg-review"></div>
     <div class="ft-seg-esc"></div>
     <div class="ft-marker" style="left:{pos:.1f}%"></div>
-    <div class="ft-marker-label" style="left:{pos:.1f}%">{p:.3f}</div>
+    <div class="ft-marker-label" style="left:{pos:.1f}%">{p:.4f}</div>
   </div>
   <div class="ft-bar-labels">
     <span style="left:0%; transform:none">0</span>
@@ -950,7 +979,7 @@ def verdict_sentence(analysis, t_close, t_esc):
         return (
             f"⬆️ Lapisan aturan memaksa ESKALASI: kombinasi "
             f"{' + '.join(rule['active_signals'])} terdeteksi "
-            f"({'; '.join(rule['reasons'])}). Skor model {p:.3f} sendiri "
+            f"({'; '.join(rule['reasons'])}). Skor model {p:.4f} sendiri "
             f"berada di zona {res['zone']} — aturan menaikkannya karena "
             f"pola ini hampir tidak pernah dilakukan pengirim sah."
         )
@@ -959,13 +988,13 @@ def verdict_sentence(analysis, t_close, t_esc):
         return (
             f"⬇️ Sinyal penenang menurunkan band satu tingkat ke "
             f"REVIEW ANALIS: {'; '.join(calm['reasons'])}. Skor model "
-            f"{p:.3f} sendiri melewati ambang eskalasi {t_esc:.3f}, "
+            f"{p:.4f} sendiri mencapai atau melampaui ambang eskalasi {t_esc:.3f}, "
             f"tetapi pola pesan ini sangat khas pengirim resmi "
             f"berformat jelas — analis tetap memeriksanya di antrean "
             f"biasa; penenang tidak pernah menutup pesan otomatis."
         )
     if p >= t_esc:
-        txt = (f"Skor {p:.3f} melewati ambang eskalasi {t_esc:.3f} → "
+        txt = (f"Skor {p:.4f} mencapai atau melampaui ambang eskalasi {t_esc:.3f} → "
                f"pesan diprioritaskan sebagai dugaan scam kuat.")
         if rule["triggered"]:
             txt += (f" Lapisan aturan juga terpicu "
@@ -973,10 +1002,10 @@ def verdict_sentence(analysis, t_close, t_esc):
                     f"dengan keputusan model.")
         return txt
     if p >= t_close:
-        return (f"Skor {p:.3f} berada di antara ambang tutup "
+        return (f"Skor {p:.4f} berada di antara ambang tutup "
                 f"{t_close:.3f} dan ambang eskalasi {t_esc:.3f} → zona "
                 f"abu-abu; analis manusia yang memutuskan.")
-    return (f"Skor {p:.3f} di bawah ambang tutup {t_close:.3f} → risiko "
+    return (f"Skor {p:.4f} di bawah ambang tutup {t_close:.3f} → risiko "
             f"sangat rendah; pesan ditutup otomatis (dengan QC sampling "
             f"berkala).")
 
@@ -1021,7 +1050,7 @@ def result_card_html(analysis, t_close, t_esc):
 <div class="ft-card" style="border-left: 6px solid {color}">
   <div class="ft-band">{icon} {name}
     <span class="ft-zone-key">— {ZONES[zone]["label_id"]}</span></div>
-  <div class="ft-score">{res["p_scam"]:.3f}
+  <div class="ft-score">{res["p_scam"]:.4f}
     <small>P(scam) terkalibrasi {help_icon('Peluang pesan ini smishing menurut model, sudah dikalibrasi: skor 0,42 berarti kira-kira 42 dari 100 pesan serupa benar-benar smishing pada data kalibrasi. Skor ini mengurutkan antrean triase — bukan vonis akhir.')}</small></div>
   <div class="ft-desc">{ZONES[zone]["desc_id"]}</div>
   <div class="ft-verdict">{verdict}</div>
@@ -1104,10 +1133,10 @@ with st.sidebar:
               <small>t_close {help_icon('Ambang tutup otomatis: skor P(scam) di bawah nilai ini masuk AUTO-CLOSE — pesan dianggap sah tanpa eskalasi. Sengaja disetel sangat rendah supaya smishing hampir mustahil ikut tertutup.')}</small><strong>{engine.t_close:.3f}</strong>
             </div>
             <div class="ft-side-stat">
-              <small>t_esc {help_icon('Ambang eskalasi: skor P(scam) di atas nilai ini masuk ESKALASI prioritas tinggi. Pada data validation, zona di atas ambang ini presisinya 90% atau lebih.')}</small><strong>{engine.t_esc:.3f}</strong>
+              <small>t_esc {help_icon('Ambang eskalasi: skor P(scam) yang mencapai nilai ini (p >= t_esc) masuk ESKALASI prioritas tinggi. Pada data validation, zona pada atau di atas ambang ini presisinya 90% atau lebih.')}</small><strong>{engine.t_esc:.3f}</strong>
             </div>
             <div class="ft-side-stat">
-              <small>PR-AUC test {help_icon('Ukuran ketepatan perangkingan model pada data uji (skala 0 sampai 1, makin tinggi makin baik). 0,986 dicapai pada data uji Inggris UCI. Angka ini menilai kualitas urutan skor, bukan akurasi vonis per pesan.')}</small><strong>0,986</strong>
+              <small>PR-AUC UCI Inggris {help_icon('Ukuran ketepatan perangkingan model pada data uji (skala 0 sampai 1, makin tinggi makin baik). 0,986 dicapai pada data uji Inggris UCI. Angka ini menilai kualitas urutan skor, bukan akurasi vonis per pesan.')}</small><strong>0,986</strong>
             </div>
             <div class="ft-side-stat">
               <small>Mesin {help_icon('Model dijalankan pada presisi penuh fp32 (floating point 32-bit), bukan hasil kuantisasi atau kompresi — skor yang tampil identik dengan saat model dievaluasi.')}</small><strong>fp32</strong>
@@ -1150,7 +1179,7 @@ with st.sidebar:
                 "3. TF-IDF + Logistic Regression\n\n"
                 f"Kebijakan live memakai **t_close = "
                 f"{engine.t_close:.3f}** dan **t_esc = "
-                f"{engine.t_esc:.3f}**. PR-AUC test ensemble adalah "
+                f"{engine.t_esc:.3f}**. PR-AUC UCI Inggris ensemble adalah "
                 "**0,986** pada arena final notebook."
             )
     elif sidebar_detail == "Aturan & sinyal penenang":
@@ -1246,7 +1275,7 @@ tab_lapor, tab_gallery, tab_single, tab_batch, tab_eval, \
      "🔐 Verifikasi"])
 
 # ---------------------------------------------------------------------------
-# Tab 1 — analisis tunggal
+# Tab 3 — analisis tunggal
 # ---------------------------------------------------------------------------
 with tab_single:
     st.markdown("**Contoh pesan — klik untuk memakai & langsung analisis**")
@@ -1392,7 +1421,7 @@ with tab_single:
         df_hist = pd.DataFrame([{
             "Waktu": r["Waktu"],
             "Pesan": _short(r["text"], 70),
-            "Skor": round(r["score"], 3),
+            "Skor": round(r["score"], 4),
             "Band model": r["zone_model"],
             "Band final": r["zone_final"],
             "Aturan": "Ya" if r["rule_triggered"] else "Tidak",
@@ -1420,7 +1449,7 @@ with tab_single:
         df_fb = pd.DataFrame([{
             "Waktu": r["Waktu"],
             "Pesan": _short(r["text"], 60),
-            "Skor": round(r["score"], 3),
+            "Skor": round(r["score"], 4),
             "Band final (app)": r["zone_final"],
             "Band koreksi (Anda)": r["correction"],
         } for r in feedback[::-1]])
@@ -1437,7 +1466,7 @@ with tab_single:
         st.caption("Belum ada koreksi pada sesi ini.")
 
 # ---------------------------------------------------------------------------
-# Tab 2 — mode batch
+# Tab 4 — mode batch
 # ---------------------------------------------------------------------------
 with tab_batch:
     st.markdown("Tempel banyak pesan sekaligus — **satu pesan per "
@@ -1483,7 +1512,7 @@ with tab_batch:
         for r in rows:
             counts[r["zone_final"]] += 1
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("🟢 AMAN", counts["AUTO-CLOSE"])
+        m1.metric("🟢 RISIKO RENDAH", counts["AUTO-CLOSE"])
         m2.metric("🟡 REVIEW ANALIS", counts["REVIEW ANALIS"])
         m3.metric("🔴 ESKALASI", counts["ESKALASI"])
         m4.metric("⬆️ Kena aturan",
@@ -1501,7 +1530,7 @@ with tab_batch:
         df_rows = pd.DataFrame([{
             "#": i + 1,
             "Pesan": _short(r["text"], 60),
-            "Skor": round(r["score"], 3),
+            "Skor": round(r["score"], 4),
             "Band model": r["zone_model"],
             "Band final": r["zone_final"],
             "Aturan terpicu": ("Ya — " + "+".join(r["signals"]))
@@ -1518,7 +1547,7 @@ with tab_batch:
         # P1: detail per kasus + laporan .md yang bisa diunduh.
         st.markdown("#### Detail kasus")
         case_labels = [
-            f"#{i + 1} · {r['score']:.3f} · "
+            f"#{i + 1} · {r['score']:.4f} · "
             f"{ZONE_DISPLAY[r['zone_final']][0]} · "
             f"{_short(r['text'], 48)}"
             for i, r in enumerate(rows)
@@ -1531,7 +1560,7 @@ with tab_batch:
         with st.container(border=True):
             st.markdown(f"**Pesan lengkap**\n\n> {r['text']}")
             c1, c2, c3 = st.columns(3)
-            c1.metric("Skor model", f"{r['score']:.3f}")
+            c1.metric("Skor model", f"{r['score']:.4f}")
             c2.metric("Band model", r["zone_model"])
             c3.metric("Band final",
                       f"{emoji_final} {nama_final}")
@@ -1563,7 +1592,7 @@ with tab_batch:
                 mime="text/markdown")
 
 # ---------------------------------------------------------------------------
-# Tab 3 — panel evaluasi Indonesia (butir E)
+# Tab 5 — panel evaluasi Indonesia (butir E)
 # ---------------------------------------------------------------------------
 with tab_eval:
     st.markdown("### 🇮🇩 Panel evaluasi pesan Indonesia")
@@ -1795,7 +1824,7 @@ with tab_eval:
                         "Pesan": _short(r["text"], 70),
                         "Kategori": r["kategori"],
                         "Label": r["label"],
-                        "Skor": round(r["score"], 3),
+                        "Skor": round(r["score"], 4),
                         "Band model simulasi": r["model_zone"],
                         "Band final simulasi": r["final_zone"],
                         "Aturan": "Ya" if r["rule_triggered"] else "Tidak",
@@ -1805,14 +1834,14 @@ with tab_eval:
                     st.dataframe(df_sim, hide_index=True)
 
 # ---------------------------------------------------------------------------
-# Tab 4 — perjalanan riset (v5): dokumentasi semua tahap percobaan,
+# Tab 6 — perjalanan riset (v5): dokumentasi semua tahap percobaan,
 # termasuk yang ditolak; model live tidak berubah.
 # ---------------------------------------------------------------------------
 with tab_journey:
     render_journey()
 
 # ---------------------------------------------------------------------------
-# Tab 5 — Siskamling Digital (Fase 1): lapor & cek pesan warga.
+# Tab 1 — Siskamling Digital (Fase 1): lapor & cek pesan warga.
 # Laporan tercatat di Turso khusus Siskamling dengan nomor laporan
 # unik + tanggal submit; lihat siskamling.py.
 # ---------------------------------------------------------------------------
@@ -1822,14 +1851,15 @@ with tab_lapor:
         lambda a: result_card_html(a, engine.t_close, engine.t_esc))
 
 # ---------------------------------------------------------------------------
-# Tab 6 — Siskamling Digital (Fase 1): galeri modus terverifikasi.
+# Tab 2 — Siskamling Digital (Fase 1): galeri modus terverifikasi.
 # ---------------------------------------------------------------------------
 with tab_gallery:
     render_gallery_tab()
 
 # ---------------------------------------------------------------------------
 # Tab 7 — Siskamling Digital (Fase 2): verifikasi admin (terkunci
-# kata sandi; label hanya ditentukan manusia, model hanya menyarankan).
+# kata sandi; pelabelan buta — saran mesin disembunyikan sampai label
+# manusia disimpan, lihat siskamling.py).
 # ---------------------------------------------------------------------------
 with tab_admin:
     render_admin_tab()

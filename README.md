@@ -98,11 +98,10 @@ diadopsi), dan kronik lengkapnya: [docs/RINCIAN.md](docs/RINCIAN.md).
 - **Model operasional (CHOSEN): Ensemble Top-3 Terkalibrasi** —
   rata-rata probabilitas terkalibrasi tiga anggota (dua pipeline
   TF-IDF + LR dan DistilBERT), dipetakan ke zona kebijakan dua
-  ambang: **t_close = 0,010** / **t_esc = 0,135**. PR-AUC test
-  (UCI Inggris) **0,986**. Polanya: **mesin mengurutkan, manusia
-  memutuskan** — skor mengurutkan antrean triase, manusia pemegang
-  vonis. Bobot modelnya sendiri **belum siap produksi** (lihat
-  hasil kunci di atas).
+  ambang: **t_close = 0,010** / **t_esc = 0,135**. PR-AUC UCI Inggris
+  **0,986**. Polanya: **mesin mengurutkan, manusia memutuskan** — skor
+  mengurutkan antrean triase, manusia pemegang vonis. Bobot modelnya
+  sendiri **belum siap produksi** (lihat hasil kunci di atas).
 - **Lapisan aturan** (`rules.py`, regex murni): tiga sinyal kuat —
   **S1** tautan, **S2** permintaan OTP/PIN/kredensial, **S3** ancaman
   + urgensi. Terpicu hanya bila **≥ 2 sinyal bersamaan**, dan hanya

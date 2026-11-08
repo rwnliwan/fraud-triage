@@ -194,10 +194,12 @@ PRIVACY_TEXT_V1 = (
 
 
 # Peta band final app -> nilai kolom reports.model_band (CHECK di schema)
-# dan label tampilnya.
+# dan label tampilnya. Nilai simpan "AMAN" dipertahankan (skema DB +
+# suggest_label membacanya); yang dilunakkan hanya label tampilnya —
+# skor rendah = risiko rendah menurut model, bukan jaminan aman. (R5, S2.)
 BAND_STORE = {"AUTO-CLOSE": "AMAN", "REVIEW ANALIS": "REVIEW",
               "ESKALASI": "ESKALASI"}
-BAND_BADGE = {"AMAN": "🟢 AMAN", "REVIEW": "🟡 REVIEW",
+BAND_BADGE = {"AMAN": "🟢 RISIKO RENDAH", "REVIEW": "🟡 REVIEW",
               "ESKALASI": "🔴 ESKALASI"}
 
 CHANNELS = {"sms": "SMS", "whatsapp": "WhatsApp",
@@ -1358,12 +1360,19 @@ def render_gallery_tab() -> None:
 # Fase 2 — Verifikasi admin (tab "🔐 Verifikasi")
 #
 # Pembagian kerja yang disepakati desain Fase 0: LABEL HANYA DITENTUKAN
-# MANUSIA. Model ensemble sudah menilai tiap laporan saat masuk (skor,
-# band, sinyal) dan di tab ini tampil sebagai SARAN — bukan keputusan.
-# Memakai model sebagai penentu label akan merusak tujuan korpus: data
-# latih baru harus berisi penilaian manusia yang independen, bukan
-# pendapat model tentang datanya sendiri (apalagi kelemahan model yang
-# terdokumentasi justru pada pesan Indonesia).
+# MANUSIA — dan sejak v6.1.3 secara BUTA. Model ensemble sudah menilai
+# tiap laporan saat masuk (skor, band, sinyal), tetapi saran itu TIDAK
+# tampil di antrean pending: peninjau membaca teksnya dulu, memilih
+# label + kategori sendiri (tanpa nilai awal), baru menyimpan. Saran
+# mesin baru tampil di daftar terverifikasi, sebagai pembanding
+# pasca-label. Alasannya sama seperti dulu — memakai model sebagai
+# penentu label akan merusak tujuan korpus: data latih baru harus
+# berisi penilaian manusia yang independen, bukan pendapat model
+# tentang datanya sendiri — dan saran yang dilihat SEBELUM memberi
+# label sudah menggeser penilaian itu (anchoring), walau labelnya
+# "tetap di tangan manusia". Antrean tetap terurut skor tertinggi
+# dulu (fungsi triase antrean), tetapi skor/band/sinyal per laporan
+# tidak ditampilkan sebelum pelabelan. (Ronde 5, M1.)
 # ---------------------------------------------------------------------------
 LABELS = ["SMISHING", "SAH", "SPAM_PROMO"]
 CATEGORIES = ["blokir_akun", "otp_palsu", "resi_paket", "undian", "apk",
@@ -1398,9 +1407,14 @@ def _fired_list(row: dict) -> list:
 def suggest_label(row: dict) -> tuple[str, str, str]:
     """Saran label dari band/sinyal model. (label, alasan, kekuatan).
 
-    Ini SARAN triase untuk mempercepat review manusia — bukan vonis;
-    keputusan tetap di tangan peninjau. Kekuatan 'lemah' berarti zona
-    abu-abu: baca teksnya sebelum memutuskan.
+    Ini SARAN triase — bukan vonis; keputusan tetap di tangan
+    peninjau. Kekuatan 'lemah' berarti zona abu-abu: baca teksnya
+    sebelum memutuskan.
+
+    Dipanggil HANYA sesudah label manusia tersimpan (daftar
+    terverifikasi, sebagai pembanding pasca-label) — JANGAN dipakai
+    untuk mengisi awal pilihan label di antrean pending (anchoring).
+    (Ronde 5, M1.)
     """
     band = row.get("model_band")
     fired = _fired_list(row)
@@ -1411,7 +1425,7 @@ def suggest_label(row: dict) -> tuple[str, str, str]:
             alasan += f" + sinyal kuat {'+'.join(strong)}"
         return "SMISHING", alasan, "kuat"
     if band == "AMAN" and not strong:
-        return "SAH", "band AMAN, tanpa sinyal kuat", "kuat"
+        return "SAH", "band AMAN (risiko rendah menurut model), tanpa sinyal kuat", "kuat"
     text = (row.get("text_scrubbed") or "").lower()
     if any(w in text for w in _PROMO_WORDS):
         return "SPAM_PROMO", "pola promosi pada zona abu-abu", "lemah"
@@ -1666,8 +1680,10 @@ def _report_meta(cfg: dict, r: dict) -> str:
 def render_admin_tab() -> None:
     st.markdown("### 🔐 Verifikasi Laporan")
     st.markdown(
-        "Ruang kerja peninjau. **Label ditentukan manusia** — model "
-        "hanya memberi saran dari skor & sinyalnya agar review cepat. "
+        "Ruang kerja peninjau. **Label ditentukan manusia, secara "
+        "buta**: saran mesin (skor, band, sinyal) disembunyikan sampai "
+        "label tersimpan — baca teksnya dulu, putuskan sendiri, baru "
+        "saran mesin tampil sebagai pembanding di daftar terverifikasi. "
         "Laporan terverifikasi + consent masuk korpus data latih; yang "
         "ditandai tampil galeri muncul di Galeri Modus publik.")
     cfg = load_config()
@@ -1748,16 +1764,15 @@ def render_admin_tab() -> None:
     st.markdown("#### Antrean pending — risiko tertinggi di atas")
     if not pending:
         st.info("Antrean kosong. Tidak ada laporan menunggu verifikasi.")
+    # Pelabelan BUTA (Ronde 5, M1): kartu pending TIDAK menampilkan
+    # skor, band, sinyal, atau saran mesin apa pun — dan pilihan
+    # label/kategori TANPA nilai awal (index=None + placeholder),
+    # supaya tidak ada jangkar dari model sebelum peninjau memutuskan
+    # sendiri dari teksnya. Saran baru dihitung & ditampilkan di daftar
+    # terverifikasi di bawah, sesudah label tersimpan.
     for r in pending:
-        sug_label, sug_reason, sug_strength = suggest_label(r)
-        sug_cat = suggest_category(r)
-        badge = BAND_BADGE.get(r["model_band"], r["model_band"] or "-")
-        fired = _fired_list(r)
         with st.container(border=True):
-            st.markdown(
-                f"**Laporan #{r['id']}** · {badge} · skor "
-                f"**{r['model_score']:.3f}**"
-                + (f" · sinyal: {'+'.join(fired)}" if fired else ""))
+            st.markdown(f"**Laporan #{r['id']}**")
             st.markdown(f"> {r['text_scrubbed']}")
             st.caption(_report_meta(cfg, r))
             enr = enrichment_summary(r.get("enrichment"))
@@ -1765,17 +1780,17 @@ def render_admin_tab() -> None:
                 st.caption(
                     f"🌐 Pengayaan intake (info pendukung, **bukan** "
                     f"penentu label): {enr}")
-            st.caption(
-                f"🤖 Saran mesin ({sug_strength}): **{sug_label}** · "
-                f"kategori **{sug_cat}** — {sug_reason}. Keputusan "
-                f"tetap di tanganmu.")
+            st.caption("🤖 Saran mesin disembunyikan sampai label "
+                       "tersimpan (pelabelan buta) — putuskan dari "
+                       "teksnya.")
             c1, c2, c3 = st.columns([2, 2, 1])
             label = c1.selectbox(
-                "Label", LABELS, index=LABELS.index(sug_label),
+                "Label", LABELS, index=None,
+                placeholder="— pilih label —",
                 key=f"adm_label_{r['id']}")
             category = c2.selectbox(
-                "Kategori modus", CATEGORIES,
-                index=CATEGORIES.index(sug_cat),
+                "Kategori modus", CATEGORIES, index=None,
+                placeholder="— pilih kategori —",
                 key=f"adm_cat_{r['id']}")
             gallery = c3.checkbox(
                 "Tampil di galeri", value=False,
@@ -1783,10 +1798,15 @@ def render_admin_tab() -> None:
             b1, b2, b3 = st.columns(3)
             if b1.button("✅ Verifikasi", type="primary",
                          key=f"adm_verify_{r['id']}"):
-                verify_report(cfg, r["id"], label, category, gallery)
-                st.success(f"Laporan #{r['id']} terverifikasi sebagai "
-                           f"{label}.")
-                st.rerun()
+                if label is None or category is None:
+                    st.warning("Pilih label dan kategori dulu sebelum "
+                               "menyimpan verifikasi.")
+                else:
+                    verify_report(cfg, r["id"], label, category,
+                                  gallery)
+                    st.success(f"Laporan #{r['id']} terverifikasi "
+                               f"sebagai {label}.")
+                    st.rerun()
             if b2.button("❌ Tolak", key=f"adm_reject_{r['id']}"):
                 reject_report(cfg, r["id"])
                 st.success(f"Laporan #{r['id']} ditolak.")
@@ -1809,6 +1829,18 @@ def render_admin_tab() -> None:
                 f"modus *{r['category_modus'] or '-'}* · {gal} · "
                 f"diverifikasi {fmt_wita(r['verified_at'])}")
             st.markdown(f"> {r['text_scrubbed']}")
+            # Saran mesin baru tampil DI SINI — sesudah label manusia
+            # tersimpan — sebagai pembanding pasca-label, bukan jangkar
+            # sebelum pelabelan. (Ronde 5, M1.)
+            sug_label, sug_reason, sug_strength = suggest_label(r)
+            sug_cat = suggest_category(r)
+            cocok = ("sama dengan saran" if sug_label == r["label"]
+                     else "berbeda dari saran")
+            st.caption(
+                f"🤖 Saran mesin saat itu ({sug_strength}): "
+                f"**{sug_label}** · kategori **{sug_cat}** — "
+                f"{sug_reason}. Label manusia di atas: **{r['label']}**"
+                f" — {cocok}.")
             b1, b2, b3 = st.columns(3)
             if r["gallery_visible"]:
                 if b1.button("🙈 Sembunyikan dari galeri",

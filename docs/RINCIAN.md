@@ -56,7 +56,7 @@ model + dropdown "Lihat detail" (komposisi, aturan, keterbatasan,
 benchmark arena, tautan).
 
 Pengguna menempel teks SMS → app menampilkan probabilitas scam terkalibrasi,
-keputusan triase (AMAN / Review Analis / Eskalasi) pada kartu hasil berwarna
+keputusan triase (Risiko Rendah / Review Analis / Eskalasi) pada kartu hasil berwarna
 dengan bilah skor visual terhadap kedua ambang, skor per anggota ensemble,
 penjelasan faktor teks (kata pendorong + fitur angka), **panel sinyal** yang
 terdeteksi dari teks, dan **lapisan aturan** keamanan di atas model.
