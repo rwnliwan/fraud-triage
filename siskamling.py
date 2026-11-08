@@ -57,6 +57,19 @@ WITA (bukan UTC). (8) Lacak laporan pakai KODE ACAK 8 karakter
 permintaan itu. (11) Migrasi SQL berversi di repo (migrations/).
 Skema baru butuh migrasi 0002 di Turso live + reboot app.
 
+Susulan v6.1.6 (9 Nov 2026, tanpa naik versi — gap ronde 8 G4–G7 +
+temuan verifikasi live): (a) lacak kode: input dinormalisasi (hubung/
+spasi dibuang) karena contoh UI memakai hubung sementara kode
+tersimpan tanpa hubung; resep menampilkan kode berhubung agar sama
+dengan contoh. (b) verify_report atomik (G5): UPDATE + jejak audit
+dalam satu batch pipeline + gagal-jujur bila jejak tak tertulis.
+(c) Sensus Turnstile penuh (G7): docs/turnstile.md. (d) Bukti
+gerbang klaim (G6): journey.py merujuk file evaluasi + konstanta
+GERBANG yang tak berubah sejak commit pertama. (e) Draf publik
+(G4): Artikel v2 diperbaiki (antrean triase + kode lacak); Reddit
+v1 dicek tanpa temuan; Presentasi hlm. 16 masih tindak lanjut
+(deck tanpa sumber di repo).
+
 Baru di v6.1.5 (perbaikan review ronde 7 Terra — independensi
 pelabelan dikunci teknis, bukan prosedural; model/skor/ambang TIDAK
 berubah): (1) Scrubber: query URL tanpa path ("https://host?token=x")
@@ -947,12 +960,31 @@ TRACK_LABEL_WARGA = {"SMISHING": "penipuan", "SAH": "bukan penipuan",
                      "SPAM_PROMO": "spam / promosi"}
 
 
+def _fmt_track_code(code: str | None) -> str:
+    """Tampilkan kode lacak 8 karakter dalam bentuk yang sama dengan
+    contoh di UI lacak (\"K7M2-Q9XA\"): 4 + hubung + 4. Kode yang
+    DISIMPAN di DB tetap tanpa hubung; hubung hanya format tampil —
+    fetch_report_by_code menerima keduanya (susulan v6.1.6)."""
+    code = (code or "").strip().upper()
+    if len(code) == TRACK_CODE_LEN:
+        return code[:4] + "-" + code[4:]
+    return code
+
+
 def fetch_report_by_code(cfg: dict, track_code: str):
     """Status SATU laporan untuk fitur lacak warga, dicari dengan KODE
     LACAK acak. Yang diambil hanya status, label, dan tanggal — teks
     pesan, hash, dan data lain TIDAK pernah ikut, jadi tidak ada yang
-    bisa bocor lewat kode lacak. Kode salah / kosong -> None."""
+    bisa bocor lewat kode lacak. Kode salah / kosong -> None.
+
+    Susulan v6.1.6: input dinormalisasi — hubung dan spasi dibuang
+    sesudah upper — karena contoh di UI (\"K7M2-Q9XA\") memakai hubung
+    sementara kode yang disimpan tanpa hubung. Tanpa ini, warga yang
+    mengetik mengikuti contoh mendapat \"tidak ditemukan\" padahal
+    kodenya benar (bukti live: '0BC9637A' ketemu, '0BC9-637A'
+    tidak)."""
     code = (track_code or "").strip().upper()
+    code = re.sub(r"[\s-]+", "", code)
     if not code:
         return None
     rows = turso_execute(
@@ -1828,7 +1860,7 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
         # nomor + catatan bahwa kode lacak belum aktif.
         if receipt.get("track_code"):
             code_line = (
-                f"Kode lacak Anda: **{receipt['track_code']}** · "
+                f"Kode lacak Anda: **{_fmt_track_code(receipt['track_code'])}** · "
                 f"simpan kode ini — status pemeriksaannya bisa Anda "
                 f"cek kapan saja di bagian **🔎 Lacak laporan saya** "
                 f"di bawah.")
@@ -2139,7 +2171,29 @@ def verify_report(cfg: dict, report_id: int, label: str, category: str,
     label korpus tetap label pertama. Efektif sampai ke ekspor: view
     corpus_export membaca reports.label pada baris status='verified'
     — dan kolom itu tidak pernah ditulis ulang sesudah verifikasi
-    pertama. Kategori/galeri masih boleh berubah (bukan label)."""
+    pertama. Kategori/galeri masih boleh berubah (bukan label).
+
+    Gap G5 ronde 8 (warisan G7 ronde 7): UPDATE reports + INSERT
+    label_log kini berjalan dalam SATU batch pipeline (turso_batch,
+    pola yang sama dengan fix M4 ronde 8) — satu transaksi menurut
+    dokumentasi Hrana. INSERT log memakai guard WHERE EXISTS atas
+    baris yang BARU terverifikasi, jadi bila UPDATE tidak mengenai
+    baris apa pun (laporan sudah tidak pending — mis. klik ganda /
+    sudah diproses peninjau lain), TIDAK ADA jejak yang tertulis.
+    Gagal-jujur: bila UPDATE tidak mengenai baris, atau jejak tidak
+    tertulis, fungsi ini melempar RuntimeError dan pemanggil WAJIB
+    menampilkan kegagalan — sukses TIDAK BOLEH dilaporkan tanpa jejak
+    audit (kelas yang sama dengan S1 ronde 8 pada adjudikasi).
+    Pengecualian satu celah: pada jalur label-beku, guard WHERE
+    EXISTS bisa lolos untuk baris yang memang sudah terverifikasi —
+    jejak hantu itu dihapus kembali (DELETE kompensasi) sebelum
+    gagal-jujur, jadi tidak ada jejak atas verifikasi yang tidak
+    terjadi.
+    CATATAN: semantik rollback-on-failure batch adalah asumsi dari
+    dokumentasi Hrana, sama seperti M4 — bentuk wire + error SUDAH
+    diverifikasi ke Turso live read-only, rollback belum terbukti
+    live; guard WHERE EXISTS menutup celah penulisan-jejak-palsu
+    walau rollback itu ternyata tidak terjadi."""
     first = frozen_label(cfg, report_id)
     if first is None:
         # Pengaman kedua: label yang masih tersimpan di barisnya
@@ -2157,23 +2211,83 @@ def verify_report(cfg: dict, report_id: int, label: str, category: str,
         # dikembalikan dengan perilaku lama (label = NULL) harus
         # mendapatkan kembali label pertamanya — bila tidak, view
         # corpus_export (label IS NOT NULL) akan kehilangan baris itu.
-        turso_execute(
-            cfg,
+        res = turso_batch(cfg, [(
             "UPDATE reports SET status = 'verified', label = ?, "
             "category_modus = ?, gallery_visible = ?, "
             "verified_at = datetime('now') WHERE id = ? "
-            "AND status = 'pending'",
+            "AND status = 'pending' RETURNING id",
             [first, category, 1 if gallery_visible else 0,
-             int(report_id)])
-        _log_label(cfg, report_id, "revisi_pasca_paparan", label)
+             int(report_id)]), (
+            "INSERT INTO label_log (report_id, aksi, label, actor) "
+            "SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM reports "
+            "WHERE id = ? AND status = 'verified' AND label = ?) "
+            "RETURNING id",
+            [int(report_id), "revisi_pasca_paparan", label,
+             "verifikator", int(report_id), first]),
+        ])
+        if not res[0]:
+            # UPDATE tidak mengenai baris (sudah tidak pending) —
+            # tetapi guard WHERE EXISTS di atas bisa saja tetap lolos
+            # pada jalur label-beku (barisnya MEMANG sudah verified
+            # dari verifikasi pertama), sehingga jejak 'revisi'
+            # sempat tertulis. Hapus jejak hantu itu (kompensasi)
+            # sebelum gagal-jujur, supaya tidak ada jejak atas
+            # verifikasi yang tidak terjadi. Bila penghapusan itu
+            # pun gagal, kegagalannya DIBAWA dalam pesan error —
+            # tidak ditelan diam-diam.
+            _phantom = ""
+            if res[1]:
+                try:
+                    turso_execute(
+                        cfg, "DELETE FROM label_log WHERE id = ?",
+                        [res[1][0]["id"]])
+                except Exception as exc:
+                    _phantom = (
+                        "; PERINGATAN: jejak hantu id="
+                        f"{res[1][0]['id']} gagal dihapus: {exc}")
+            raise RuntimeError(
+                "verifikasi gagal: laporan sudah tidak pending"
+                + _phantom)
+        if not res[1]:
+            raise RuntimeError(
+                "verifikasi gagal: jejak audit tidak tertulis")
         return first
-    turso_execute(
-        cfg,
+    res = turso_batch(cfg, [(
         "UPDATE reports SET status = 'verified', label = ?, "
         "category_modus = ?, gallery_visible = ?, "
-        "verified_at = datetime('now') WHERE id = ? AND status = 'pending'",
-        [label, category, 1 if gallery_visible else 0, int(report_id)])
-    _log_label(cfg, report_id, "verifikasi", label)
+        "verified_at = datetime('now') WHERE id = ? AND status = 'pending' "
+        "RETURNING id",
+        [label, category, 1 if gallery_visible else 0, int(report_id)]),
+        (
+        "INSERT INTO label_log (report_id, aksi, label, actor) "
+        "SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM reports "
+        "WHERE id = ? AND status = 'verified' AND label = ?) "
+        "RETURNING id",
+        [int(report_id), "verifikasi", label, "verifikator",
+         int(report_id), label]),
+    ])
+    if not res[0]:
+        # Jalur verifikasi pertama: guard WHERE EXISTS di atas hanya
+        # bisa lolos bila UPDATE baru saja jalan (sebelumnya status
+        # masih 'pending'), jadi jejak hantu tidak mungkin di sini —
+        # tetapi pertahankan simetri dengan jalur label-beku: bila
+        # entah bagaimana jejak tertulis tanpa UPDATE, hapus (dan
+        # bila penghapusan gagal, bawa kegagalannya di pesan error).
+        _phantom = ""
+        if res[1]:
+            try:
+                turso_execute(
+                    cfg, "DELETE FROM label_log WHERE id = ?",
+                    [res[1][0]["id"]])
+            except Exception as exc:
+                _phantom = (
+                    "; PERINGATAN: jejak hantu id="
+                    f"{res[1][0]['id']} gagal dihapus: {exc}")
+        raise RuntimeError(
+            "verifikasi gagal: laporan sudah tidak pending" + _phantom)
+    if not res[1]:
+        raise RuntimeError(
+            "verifikasi gagal: jejak audit tidak tertulis")
     return label
 
 
@@ -2581,9 +2695,22 @@ def render_admin_tab() -> None:
                     st.warning("Pilih label dan kategori dulu sebelum "
                                "menyimpan verifikasi.")
                 else:
-                    eff_label = verify_report(cfg, r["id"], label,
-                                              category, gallery)
-                    if eff_label != label:
+                    # Gap G5 ronde 8: verify_report gagal-jujur (melempar
+                    # bila baris sudah tidak pending atau jejak audit
+                    # tidak tertulis) — tampilkan sebagai kegagalan,
+                    # jangan laporkan sukses.
+                    try:
+                        eff_label = verify_report(cfg, r["id"], label,
+                                                  category, gallery)
+                    except Exception as exc:
+                        st.error(f"Verifikasi gagal tersimpan: {exc} — "
+                                 "label belum tercatat; coba lagi.")
+                        eff_label = None
+                    if eff_label is None:
+                        pass  # gagal sudah ditampilkan di atas; jangan
+                        # rerun (pesan error akan hilang) dan jangan
+                        # klaim sukses.
+                    elif eff_label != label:
                         st.success(
                             f"Laporan #{r['id']} terverifikasi kembali "
                             "— label korpus tetap label pertama "
@@ -2591,10 +2718,11 @@ def render_admin_tab() -> None:
                             f"{label} yang Anda beri dicatat terpisah "
                             "sebagai revisi pasca-paparan di jejak "
                             "audit.")
+                        st.rerun()
                     else:
                         st.success(f"Laporan #{r['id']} terverifikasi "
                                    f"sebagai {label}.")
-                    st.rerun()
+                        st.rerun()
             if b2.button("❌ Tolak", key=f"adm_reject_{r['id']}"):
                 reject_report(cfg, r["id"])
                 st.success(f"Laporan #{r['id']} ditolak.")

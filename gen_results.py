@@ -40,6 +40,16 @@ ID_TRAIN = os.path.join(HERE, "..", "id-train")
 OUT = os.path.join(HERE, "results.json")
 
 GERBANG = {"sah": 85, "smishing": 95, "uci_pr_auc": 0.98, "auto_close": 0}
+# Bukti "gerbang ditetapkan di muka dan tidak pernah digeser"
+# (gap G6 ronde 8): SATU konstanta ini dipakai untuk SEMUA tahap —
+# tidak ada gerbang per tahap yang bisa digeser diam-diam — dan
+# nilainya IDENTIK dengan ambang yang sudah tertulis di dalam tiap
+# file evaluasi itu sendiri (kunci "gerbang" di eval_smoke_current /
+# eval_tahap2c / eval_tahap2d, 22 Okt 2026), serta TAK BERUBAH sejak
+# commit pertama berkas ini (8597d3a, 23 Okt 2026). Batas bukti: tidak
+# ada stempel waktu independen yang membuktikan ambang ditetapkan
+# sebelum Tahap 0 dilihat — yang terbukti adalah identik di semua
+# artefak dan tidak pernah berubah sesudahnya (lihat journey.py).
 
 
 def _load(name):

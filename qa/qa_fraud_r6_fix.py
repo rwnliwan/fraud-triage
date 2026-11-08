@@ -1,5 +1,8 @@
 """QA eksekusi fix ronde 6 + ronde 7 + ronde 8 Fraud Triage (v6.1.6)
-— M1/M2/S5 (R6) + M1–M4/S1–S10/N1–N3 (R7) + M1–M9/S1–S7/N1–N5 (R8).
+— M1/M2/S5 (R6) + M1–M4/S1–S10/N1–N3 (R7) + M1–M9/S1–S7/N1–N5 (R8)
++ susulan v6.1.6 (9 Nov 2026, tanpa naik versi): normalisasi kode
+lacak + gap G4 (draf publik vs kode) + G5 (verify_report atomik) +
+G6 (bukti gerbang) + G7 (sensus Turnstile).
 
 Mensimulasikan skema Turso live (reports + label_log + view
 corpus_export, persis definisi sqlite_master live 2026-11-08) di
@@ -68,6 +71,33 @@ def fake_turso(cfg, sql, args=None):
 
 
 sk.turso_execute = fake_turso
+FAIL_LOG = {"on": False}
+
+
+def fake_batch_main(cfg, statements):
+    """Simulasi turso_batch atas `con` (seksi awal guard): satu
+    transaksi SQLite; satu langkah gagal -> SEMUA dibatalkan. Dipakai
+    verify_report sejak gap G5 ronde 8 — tanpa stub ini seksi awal
+    akan memanggil turso_batch asli (HTTP ke Turso)."""
+    try:
+        out = []
+        for sql, args in statements:
+            if FAIL_LOG["on"] and "INSERT INTO label_log" in sql:
+                raise RuntimeError("simulasi: label_log gagal tulis")
+            cur = con.execute(sql, args or [])
+            if cur.description is None:
+                out.append([])
+            else:
+                cols = [d[0] for d in cur.description]
+                out.append([dict(zip(cols, r)) for r in cur.fetchall()])
+        con.commit()
+        return out
+    except Exception:
+        con.rollback()
+        raise
+
+
+sk.turso_batch = fake_batch_main
 fails = []
 
 
@@ -122,6 +152,35 @@ log = fake_turso(CFG, "SELECT aksi, label FROM label_log WHERE report_id = 2 ORD
 check("M2 revision logged separately as revisi_pasca_paparan/SAH",
       ("revisi_pasca_paparan", "SAH") in [(r["aksi"], r["label"]) for r in log], str(log))
 check("M2 frozen_label() = SMISHING", sk.frozen_label(CFG, 2) == "SMISHING")
+
+# --- Gap G5 ronde 8: verify_report atomik + gagal-jujur ---
+# #2 sudah terverifikasi (tidak pending): verifikasi ulang langsung
+# ke verify_report (tanpa unverify dulu) WAJIB gagal-jujur — bukan
+# sukses diam-diam tanpa jejak.
+_log_before = fake_turso(CFG, "SELECT COUNT(*) AS n FROM label_log")[0]["n"]
+try:
+    sk.verify_report(CFG, 2, "SAH", "blokir_akun", False)
+    _g5_raise = False
+except RuntimeError:
+    _g5_raise = True
+_log_after = fake_turso(CFG, "SELECT COUNT(*) AS n FROM label_log")[0]["n"]
+check("R8-G5 verify atas laporan tak-pending -> RuntimeError",
+      _g5_raise is True, str(_g5_raise))
+check("R8-G5 verify gagal tidak menulis jejak palsu",
+      _log_after == _log_before, f"{_log_before} -> {_log_after}")
+# Kegagalan tulis log di tengah batch -> exception + baris tetap pending.
+FAIL_LOG["on"] = True
+try:
+    sk.verify_report(CFG, 3, "SMISHING", "undian", False)
+    _g5_logfail = False
+except RuntimeError:
+    _g5_logfail = True
+FAIL_LOG["on"] = False
+_row3 = fake_turso(CFG, "SELECT status FROM reports WHERE id = 3")[0]
+check("R8-G5 gagal tulis log -> verify raise (bukan sukses)",
+      _g5_logfail is True, str(_g5_logfail))
+check("R8-G5 gagal tulis log -> baris tetap pending (batch batal)",
+      _row3["status"] == "pending", str(_row3))
 
 # --- M2 legacy: baris yang dikembalikan dengan perilaku lama
 # (label NULL, tapi label_log punya 'verifikasi' pertama = SAH) ---
@@ -937,12 +996,16 @@ check("R8-GG-16 10 laporan pengirim -> gate False", _can is False,
 # config (None -> db_ready False), adjudikasi batch (False),
 # submit/lacak/galeri/analitik/antrean (pesan error + return/None),
 # metrik (0/[]), enrichment/OCR (None/"unavailable", best-effort).
+# Audit susulan 2026-11-09 (36 handler, +3): verify_report jalur
+# label-beku + verifikasi-pertama (2x DELETE kompensasi jejak hantu —
+# gagal hapus DIBAWA dalam RuntimeError, bukan ditelan) dan pemanggil
+# UI tombol Verifikasi (1x st.error + tanpa rerun, gagal-jujur).
 # Keterbatasan: sensus hanya hitungan — fail-open BARU di dalam
 # handler yang sudah ada tidak tertangkap; tiap handler baru WAJIB
 # didaftarkan di sini + alasan fail-closed-nya.
 _n_except = SRC.count("except Exception")
 check("R8-GG-16 sensus except-Exception (tripwire hitungan)",
-      _n_except == 33, f"count={_n_except} (daftarkan handler baru)")
+      _n_except == 36, f"count={_n_except} (daftarkan handler baru)")
 
 # --- S4 (KELAS): batas harian UTC vs WITA ------------------------------
 # Pola umum: "per hari" = hari WITA di SEMUA penghitung batas — diuji
@@ -1032,6 +1095,29 @@ check("R8-M9/§6b tidak ada lagi number_input lacak",
       "number_input" not in SRC)
 check("R8-M9/§6b expander lacak pakai kode (text input)",
       "Kode lacak" in SRC)
+
+# --- Susulan v6.1.6: normalisasi kode lacak (temuan verifikasi live) ---
+# Contoh UI memakai hubung ("K7M2-Q9XA") sementara kode tersimpan
+# tanpa hubung — warga yang mengetik mengikuti contoh WAJIB ketemu.
+if _code1:
+    _hyph = _code1[:4] + "-" + _code1[4:]
+    check("R8-M9/susulan lacak berhubung ketemu baris yang sama",
+          _fetch_by_code(_hyph) is not None
+          and _fetch_by_code(_hyph)["status"] == "pending",
+          _hyph)
+    check("R8-M9/susulan lacak huruf-kecil ketemu baris yang sama",
+          _fetch_by_code(_code1.lower()) is not None, _code1.lower())
+    check("R8-M9/susulan lacak berhubung+huruf-kecil ketemu",
+          _fetch_by_code(_hyph.lower()) is not None, _hyph.lower())
+    check("R8-M9/susulan lacak berspasi ketemu",
+          _fetch_by_code(" " + _code1 + " ") is not None)
+    check("R8-M9/susulan kode salah tetap None (normalisasi tak "
+          "melonggarkan)",
+          _fetch_by_code("ZZZZ-ZZZZ") is None)
+    check("R8-M9/susulan resep tampilkan kode berhubung (format contoh)",
+          "_fmt_track_code(receipt['track_code'])" in SRC)
+else:
+    check("R8-M9/susulan (dilewati: submit lacak gagal)", False, "no code")
 
 # --- S2 (KASUS + daftar tumbuh): klaim absolut persetujuan/privasi -----
 # Keterbatasan jujur: guard string tidak menangkap frasa absolut BARU
@@ -1159,6 +1245,96 @@ check("R8-N4 persen SAH/SMISHING konsisten dengan k/n per stage",
 check("R8-N5 remoteip didokumentasikan tak tersedia (opsional API)",
       "remoteip" in SRC and "tidak mengekspos IP klien" in SRC)
 check("R8 app version v6.1.6", 'APP_VERSION = "v6.1.6"' in APP_SRC)
+
+# --- Gap G5 ronde 8: verify_report atomik + gagal-jujur --------------
+# (cek struktural — SRC baru terdefinisi di titik ini)
+_vrf = SRC.split("def verify_report(cfg")[1].split("def reject_report")[0]
+check("R8-G5 verify_report memakai turso_batch (bukan dua execute)",
+      "turso_batch(cfg" in _vrf)
+check("R8-G5 pemanggil UI tangkap gagal verify (st.error)",
+      "Verifikasi gagal tersimpan" in SRC)
+check("R8-G5 jejak hantu dihapus kompensasi bila UPDATE tak mengenai",
+      "DELETE FROM label_log WHERE id = ?" in _vrf)
+
+# --- Gap G6 ronde 8: bukti gerbang klaim ------------------------------
+import json as _json
+_gen_src = (REPO / "gen_results.py").read_text(encoding="utf-8")
+_m = re.search(r"GERBANG\s*=\s*\{([^}]*)\}", _gen_src)
+_g = {}
+if _m:
+    for _kv in _m.group(1).split(","):
+        _k, _v = _kv.split(":")
+        _g[_k.strip().strip("\"'")] = float(_v.strip())
+check("R8-G6 GERBANG gen_results.py = gates results.json",
+      _g.get("sah") == _res8["gates"]["sah"]
+      and _g.get("smishing") == _res8["gates"]["smishing"]
+      and _g.get("uci_pr_auc") == _res8["gates"]["uci_pr_auc"]
+      and _g.get("auto_close") == _res8["gates"]["auto_close"],
+      str(_g))
+check("R8-G6 GERBANG satu konstanta (bukan per tahap)",
+      _gen_src.count("GERBANG = ") == 1
+      and '"gates": GERBANG' in _gen_src)
+_id_train = REPO.parent / "id-train"
+if _id_train.is_dir():
+    _ev_ok, _ev_bad = True, []
+    for _f in ("eval_smoke_current.json", "eval_tahap2c.json",
+               "eval_tahap2d.json"):
+        _ev = _json.loads((_id_train / _f).read_text(encoding="utf-8"))
+        _thr = {g["ukuran"]: g["nilai"] for g in _ev.get("gerbang", [])}
+        _same = (any("85%" in k for k in _thr)
+                 and any("95%" in k for k in _thr)
+                 and any("0,98" in k for k in _thr))
+        if not _same:
+            _ev_ok, _ev_bad = False, _ev_bad + [_f]
+    check("R8-G6 ambang sama tercatat di ketiga file evaluasi",
+          _ev_ok, str(_ev_bad))
+else:
+    print("SKIP R8-G6 file evaluasi (id-train tak ada di mesin ini)")
+check("R8-G6 journey.py merujuk bukti gerbang + batasnya",
+      "di dalam ketiga" in JRN_SRC
+      and "file evaluasi itu sendiri" in JRN_SRC
+      and "tak berubah sejak commit" in JRN_SRC
+      and "pertamanya (23 Okt 2026)" in JRN_SRC
+      and "Batas bukti ini" in JRN_SRC)
+
+# --- Gap G7 ronde 8: sensus Turnstile ----------------------------------
+_turn_doc = REPO / "docs" / "turnstile.md"
+check("R8-G7 dokumen sensus Turnstile ada",
+      _turn_doc.is_file())
+if _turn_doc.is_file():
+    _td = _turn_doc.read_text(encoding="utf-8")
+    for _jalur in ("Jalur 1", "Jalur 2", "Jalur 3", "Jalur 4",
+                   "Jalur 5", "Jalur 6"):
+        check(f"R8-G7 sensus memuat {_jalur}", _jalur in _td)
+    check("R8-G7 sensus nyatakan intake satu-satunya jalur tulis publik",
+          "SATU-SATUNYA jalur tulis publik" in _td)
+    check("R8-G7 sensus catat helper turnstile_active tak terpakai",
+          "turnstile_active" in _td)
+_calls = [ln for ln in SRC.splitlines()
+          if "_turnstile_passed(cfg" in ln and "def " not in ln]
+check("R8-G7 siteverify hanya dipanggil dari jalur intake (1 call-site)",
+      len(_calls) == 1, str(_calls))
+check("R8-G7 app.py tak panggil verify_turnstile langsung",
+      "verify_turnstile(" not in APP_SRC
+      and "_turnstile_passed(" not in APP_SRC)
+check("R8-G7 verify_turnstile didefinisikan sekali di siskamling.py",
+      SRC.count("def verify_turnstile") == 1)
+
+# --- Gap G4 ronde 8: draf publik vs kode v6.1.6 ------------------------
+_p2 = REPO.parent / "p2-assets"
+if _p2.is_dir():
+    _art = (_p2 / "artikel-medium-substack-v2.md").read_text(
+        encoding="utf-8") if (_p2 / "artikel-medium-substack-v2.md").exists() else ""
+    check("R8-G4 Artikel v2 tak lagi klaim daftar triase terurut skor ada",
+          "daftar triase terurut skor ada terpisah" not in _art)
+    check("R8-G4 Artikel v2 sebut kode lacak acak (bukan nomor lacak)",
+          "kode lacak acak" in _art and "nomor lacak" not in _art)
+    _red = (_p2 / "draf-reddit-v1.md").read_text(
+        encoding="utf-8") if (_p2 / "draf-reddit-v1.md").exists() else ""
+    check("R8-G4 Reddit v1 tanpa klaim nomor/antrean yang kedaluwarsa",
+          "nomor lacak" not in _red and "terurut skor" not in _red)
+else:
+    print("SKIP R8-G4 draf publik (p2-assets tak ada di mesin ini)")
 
 print()
 print("FAILURES:", fails if fails else "none — ALL PASS")
