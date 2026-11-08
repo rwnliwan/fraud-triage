@@ -73,7 +73,12 @@ _URL_RE = re.compile(
     r"(?:https?://)?(?:www\.)?"
     r"(?:[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?\.)+"
     r"(?:" + _TLDS + r")"
-    r"(?:/[^\s]*)?",
+    # Ronde 7, M1: ekor URL WAJIB menelan "?query" juga bila tanpa path
+    # ("(?:[/?][^\s]*)?"). Pola lama "(?:/[^\s]*)?" hanya menelan query
+    # bila didahului "/", sehingga "https://host?token=x" menyisakan
+    # "?token=x" utuh di teks tersimpan — bertentangan dengan janji
+    # modul ini ("path & query dibuang").
+    r"(?:[/?][^\s]*)?",
     re.IGNORECASE,
 )
 _URL_TRAILING_PUNCT = ".,!?;:'\")»>]}…"
@@ -158,8 +163,11 @@ def scrub(text: str) -> tuple[str, list[str]]:
         raw = m.group(0)
         core = raw.rstrip(_URL_TRAILING_PUNCT)
         suffix = raw[len(core):]
-        host = re.sub(r"^(?:https?://)?(?:www\.)?", "", core,
-                      flags=re.IGNORECASE).split("/")[0].lower()
+        # Host = sampai "/" ATAU "?" pertama (Ronde 7, M1: query tanpa
+        # path kini ikut tercocok, jadi host tidak boleh menelan "?…").
+        host = re.split(r"[/?]", re.sub(
+            r"^(?:https?://)?(?:www\.)?", "", core,
+            flags=re.IGNORECASE))[0].lower()
         if not any(ch.isalpha() for ch in host):
             return raw  # bukan domain sungguhan; jangan sentuh
         note(FINDING_TAUTAN)

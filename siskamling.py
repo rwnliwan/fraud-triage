@@ -31,7 +31,29 @@ pun. (4) Pengayaan intake: umur domain via RDAP publik disimpan di
 reports.enrichment (info pendukung verifikasi, bukan penentu label).
 (5) Anti-racun korpus: batas 3 laporan per teks sama per hari; tabel
 label_log (jejak audit label) + tinjauan kedua buta atas sampel acak
-terverifikasi — yang cocok menjadi "subset emas" (tampil di Analitik).
+terverifikasi — yang cocok masuk hitungan "disepakati dua peninjau"
+(tampil di Analitik); yang berbeda menunggu adjudikasi peninjau utama.
+
+Baru di v6.1.5 (perbaikan review ronde 7 Terra — independensi
+pelabelan dikunci teknis, bukan prosedural; model/skor/ambang TIDAK
+berubah): (1) Scrubber: query URL tanpa path ("https://host?token=x")
+kini ikut dibuang — pola lama hanya menelan query sesudah "/".
+(2) Kartu pending TIDAK LAGI membocorkan riwayat "pernah
+terverifikasi", pengayaan intake, atau metadata pengirim/duplikasi —
+ketiganya pindah ke daftar terverifikasi (pasca-label). (3) Expander
+triase hanya menampilkan JUMLAH total laporan pending — tanpa ID,
+urutan skor, atau band. (4) "Subset emas / paling tepercaya" diganti
+klaim jujur "disepakati dua peninjau" (kesepakatan, bukan bukti label
+benar) + jalur adjudikasi untuk tinjauan kedua yang berbeda.
+(5) Analitik: consent dihitung atas laporan yang masih dalam alur
+(pending/terverifikasi); rata-rata waktu verifikasi diukur sampai
+verifikasi PERTAMA (label_log) dengan saring timestamp anomali;
+grafik harian memakai tanggal WITA. (6) Aturan S2 kini menangkap
+"berikan/bagikan/kasih/serahkan OTP" — penjaga "jangan" tetap
+melindungi kalimat pelindung. (7) Panel evaluasi menampilkan kolom
+"Catatan ambang" bila skor 4 desimal membulat tepat ke ambang.
+(8) Narasi perjalanan riset: bahasa kausal "sembuh / membuat gagal"
+diganti deskriptif.
 
 Baru di v6.1.4 (perbaikan review ronde 6 Terra — independensi
 pelabelan & kejujuran vonis; model/skor/ambang TIDAK berubah):
@@ -661,7 +683,7 @@ def fetch_report_status(cfg: dict, report_id: int):
     return rows[0] if rows else None
 
 
-# --- Jejak audit label + subset emas (label_log, migrasi v6.0) --------
+# --- Jejak audit label + tinjauan kedua (label_log, migrasi v6.0) ------
 def _log_label(cfg: dict, report_id: int, aksi: str,
                label: str | None = None,
                actor: str = "verifikator") -> None:
@@ -679,8 +701,11 @@ def _log_label(cfg: dict, report_id: int, aksi: str,
 
 
 def gold_count(cfg: dict) -> int:
-    """Jumlah laporan terverifikasi yang LOLOS tinjauan kedua dengan
-    label yang sama — definisi 'subset emas' korpus."""
+    """Jumlah laporan terverifikasi yang labelnya DISEPAKATI tinjauan
+    kedua — ukuran KESEPAKATAN dua peninjau, BUKAN bukti label benar
+    (Ronde 7, M4: label "subset emas / paling tepercaya" dulu melebihi
+    yang diukur — bila kedua peninjau keliru sama, baris itu tetap
+    masuk hitungan)."""
     try:
         return turso_execute(
             cfg,
@@ -691,6 +716,74 @@ def gold_count(cfg: dict) -> int:
         )[0]["n"]
     except Exception:
         return 0
+
+
+def disputed_count(cfg: dict) -> int:
+    """Laporan terverifikasi yang tinjauan keduanya BERBEDA dari label
+    tercatat dan BELUM diadjudikasi (Ronde 7, M4) — menunggu keputusan
+    peninjau utama; label korpus belum berubah sampai diputuskan."""
+    try:
+        return turso_execute(
+            cfg,
+            "SELECT COUNT(*) AS n FROM reports r "
+            "WHERE r.status = 'verified' AND EXISTS ("
+            "SELECT 1 FROM label_log l WHERE l.report_id = r.id "
+            "AND l.aksi = 'tinjauan_kedua' AND l.label <> r.label) "
+            "AND NOT EXISTS (SELECT 1 FROM label_log a "
+            "WHERE a.report_id = r.id AND a.aksi = 'adjudikasi')"
+        )[0]["n"]
+    except Exception:
+        return 0
+
+
+def fetch_disputed(cfg: dict, limit: int = 10) -> list:
+    """Daftar laporan yang menunggu adjudikasi (beda tinjauan kedua,
+    belum ada putusan 'adjudikasi' di label_log)."""
+    try:
+        return turso_execute(
+            cfg,
+            "SELECT * FROM reports r WHERE r.status = 'verified' "
+            "AND EXISTS (SELECT 1 FROM label_log l "
+            "WHERE l.report_id = r.id AND l.aksi = 'tinjauan_kedua' "
+            "AND l.label <> r.label) "
+            "AND NOT EXISTS (SELECT 1 FROM label_log a "
+            "WHERE a.report_id = r.id AND a.aksi = 'adjudikasi') "
+            "ORDER BY verified_at ASC LIMIT ?",
+            [int(limit)])
+    except Exception:
+        return []
+
+
+def adjudicate_report(cfg: dict, report_id: int, putusan: str,
+                      actor: str = "verifikator") -> bool:
+    """Adjudikasi atas perbedaan tinjauan kedua (Ronde 7, M4).
+
+    putusan 'pertahankan': label beku dipertahankan — perbedaan
+    dinyatakan selesai. putusan 'diragukan': label beku diragukan —
+    baris tetap di luar hitungan disepakati dan ditandai untuk
+    ditinjau ulang di luar app. TIDAK mengubah reports.label (label
+    pertama tetap beku); hanya mencatat putusan di label_log sebagai
+    'adjudikasi'. Kembalikan False bila tidak ada perbedaan yang
+    menunggu adjudikasi untuk laporan ini."""
+    if putusan not in ("pertahankan", "diragukan"):
+        return False
+    rows = turso_execute(
+        cfg, "SELECT label FROM reports WHERE id = ? "
+             "AND status = 'verified'", [int(report_id)])
+    if not rows:
+        return False
+    pending = turso_execute(
+        cfg,
+        "SELECT COUNT(*) AS n FROM reports r WHERE r.id = ? "
+        "AND EXISTS (SELECT 1 FROM label_log l WHERE l.report_id = r.id "
+        "AND l.aksi = 'tinjauan_kedua' AND l.label <> r.label) "
+        "AND NOT EXISTS (SELECT 1 FROM label_log a "
+        "WHERE a.report_id = r.id AND a.aksi = 'adjudikasi')",
+        [int(report_id)])
+    if not pending or not pending[0]["n"]:
+        return False
+    _log_label(cfg, report_id, "adjudikasi", putusan, actor=actor)
+    return True
 
 
 def fetch_second_review_sample(cfg: dict, limit: int = 3) -> list:
@@ -710,9 +803,10 @@ def second_review(cfg: dict, report_id: int, label: str,
                   actor: str = "verifikator-2") -> str:
     """Catat tinjauan kedua atas satu laporan terverifikasi.
 
-    Kembalikan 'cocok' (label sama -> masuk subset emas), 'beda'
-    (dicatat sebagai perbedaan; label asli TIDAK diubah — mengubah
-    label adalah keputusan peninjau utama), atau 'hilang' (baris
+    Kembalikan 'cocok' (label sama -> masuk hitungan disepakati dua
+    peninjau), 'beda' (dicatat sebagai perbedaan; label asli TIDAK
+    diubah — mengubah label adalah keputusan peninjau utama, lewat
+    adjudikasi; lihat adjudicate_report), atau 'hilang' (baris
     tidak lagi terverifikasi). `actor` dicatat di label_log supaya
     peninjau pertama dan kedua bisa dibedakan (Ronde 6, S5)."""
     rows = turso_execute(
@@ -1411,10 +1505,9 @@ def render_gallery_tab() -> None:
 # saja sudah memberi tahu peninjau laporan mana yang dinilai model
 # paling berisiko, tanpa satu angka pun tampil. Antrean pelabelan
 # kini urut waktu masuk (created_at ASC, tanpa sinyal model apa pun);
-# antrean triase terurut skor (fetch_pending_triage) tetap ada untuk
-# perencanaan kapasitas, tetapi tampil terpisah di expander tertutup
-# + berperingatan, tanpa teks dan tanpa tombol label — bukan untuk
-# memilih urutan pelabelan.
+# sejak v6.1.5 (Ronde 7, M3) expander triase HANYA menampilkan jumlah
+# total laporan pending — tanpa ID, urutan, atau band — karena
+# peringatan prosedural ("jangan dibuka dulu") terbukti bukan kontrol.
 #
 # Sejak v6.1.4 (Ronde 6, M2) label pertama DIBEKUKAN: unverify_report
 # tidak lagi menghapus label, dan verify_report tidak menimpa label
@@ -1514,9 +1607,12 @@ def fetch_pending_triage(cfg: dict, limit: int = 50) -> list:
     """Antrean TRIASE operasional: skor model tertinggi dulu.
 
     Hanya untuk perencanaan kapasitas (berapa laporan berisiko
-    menunggu) — tampil di expander tertutup + berperingatan, tanpa
-    teks dan tanpa tombol label. JANGAN dipakai untuk memilih urutan
-    pelabelan: urutan ini sendiri adalah sinyal mesin (Ronde 6, M1)."""
+    menunggu) — JANGAN dipakai untuk memilih urutan pelabelan: urutan
+    ini sendiri adalah sinyal mesin (Ronde 6, M1). Sejak v6.1.5
+    (Ronde 7, M3) UI TIDAK LAGI menampilkan baris per laporan dari
+    antrean ini — expander triase hanya menampilkan jumlah total —
+    jadi fungsi ini dipertahankan sebagai helper data, bukan tampilan.
+    """
     return turso_execute(
         cfg,
         "SELECT * FROM reports WHERE status = 'pending' "
@@ -1712,13 +1808,31 @@ def analytics_snapshot(cfg: dict) -> dict:
     snap["channel"] = {r["channel"]: r["n"] for r in turso_execute(
         cfg, "SELECT channel, COUNT(*) AS n FROM reports "
              "GROUP BY channel")}
+    # Ronde 7, S1: penyebut HANYA baris yang masih dalam alur
+    # (pending/verified) — baris rejected/deleted tidak akan pernah
+    # masuk korpus, jadi menghitungnya melesetkan "persen pelapor
+    # yang menyetujui".
     row = turso_execute(
-        cfg, "SELECT AVG(consent_data_use) AS r FROM reports")[0]
+        cfg, "SELECT AVG(consent_data_use) AS r FROM reports "
+             "WHERE status IN ('pending', 'verified')")[0]
     snap["consent_rate"] = (row["r"] or 0.0) * 100.0
+    # Ronde 7, S2: durasi diukur sampai verifikasi PERTAMA (aksi
+    # 'verifikasi' paling awal di label_log), bukan verified_at yang
+    # tertimpa tiap verifikasi ulang sesudah unverify. Bila label_log
+    # belum punya jejak itu (baris warisan), pakai verified_at.
+    # Ronde 7, N1: saring timestamp anomali (verifikasi sebelum
+    # submit) supaya satu baris rusak tidak menggeser rata-rata.
     row = turso_execute(
-        cfg, "SELECT AVG((julianday(verified_at) - "
-             "julianday(created_at)) * 24.0) AS h FROM reports "
-             "WHERE verified_at IS NOT NULL")[0]
+        cfg,
+        "SELECT AVG((julianday(COALESCE(v.first_verified, "
+        "r.verified_at)) - julianday(r.created_at)) * 24.0) AS h "
+        "FROM reports r LEFT JOIN (SELECT report_id, "
+        "MIN(created_at) AS first_verified FROM label_log "
+        "WHERE aksi = 'verifikasi' GROUP BY report_id) v "
+        "ON v.report_id = r.id "
+        "WHERE COALESCE(v.first_verified, r.verified_at) IS NOT NULL "
+        "AND COALESCE(v.first_verified, r.verified_at) "
+        ">= r.created_at")[0]
     snap["avg_verify_hours"] = row["h"]
     snap["corpus_by_label"] = {r["label"]: r["n"] for r in turso_execute(
         cfg, "SELECT label, COUNT(*) AS n FROM corpus_export "
@@ -1727,16 +1841,22 @@ def analytics_snapshot(cfg: dict) -> dict:
         cfg, "SELECT category_modus AS k, COUNT(*) AS n FROM reports "
              "WHERE status = 'verified' AND category_modus IS NOT NULL "
              "GROUP BY category_modus ORDER BY n DESC LIMIT 8")
+    # Ronde 7, N3: kelompokkan per tanggal WITA (UTC+8), bukan UTC —
+    # semua tampilan waktu lain di app memakai WITA; laporan dini hari
+    # (00:00–07:59 WITA) sebelumnya terhitung di hari UTC sebelumnya.
+    # Jendela 15 hari memberi ruang untuk pergeseran +8 jam.
     daily = {r["d"]: r["n"] for r in turso_execute(
-        cfg, "SELECT date(created_at) AS d, COUNT(*) AS n FROM reports "
-             "WHERE created_at >= datetime('now', '-14 days') "
-             "GROUP BY date(created_at)")}
-    today = datetime.now(timezone.utc).date()
+        cfg, "SELECT date(created_at, '+8 hours') AS d, COUNT(*) AS n "
+             "FROM reports "
+             "WHERE created_at >= datetime('now', '-15 days') "
+             "GROUP BY date(created_at, '+8 hours')")}
+    today = (datetime.now(timezone.utc) + timedelta(hours=8)).date()
     snap["daily14"] = [
         ((today - timedelta(days=i)).isoformat(),
          daily.get((today - timedelta(days=i)).isoformat(), 0))
         for i in range(13, -1, -1)]
     snap["gold"] = gold_count(cfg)
+    snap["disputed"] = disputed_count(cfg)  # Ronde 7, M4
     snap["unique_senders"] = turso_execute(
         cfg, "SELECT COUNT(DISTINCT sender_hash) AS n FROM reports "
              "WHERE sender_hash IS NOT NULL")[0]["n"]
@@ -1767,10 +1887,13 @@ def _render_analytics(cfg: dict) -> None:
                    f"(>1 laporan): {s['repeat_senders']}.")
     a4.metric("Tingkat consent data", f"{s['consent_rate']:.0f}%",
               help="Persen pelapor yang menyetujui laporannya dipakai "
-                   "untuk galeri anonim + data latih.")
+                   "untuk galeri anonim + data latih — di antara laporan "
+                   "yang masih dalam alur (pending/terverifikasi); yang "
+                   "ditolak/dihapus tidak dihitung. (Ronde 7, S1.)")
     if s["avg_verify_hours"] is not None:
         st.caption(f"Rata-rata waktu verifikasi: "
-                   f"{s['avg_verify_hours']:.1f} jam sejak submit.")
+                   f"{s['avg_verify_hours']:.1f} jam sejak submit "
+                   f"sampai verifikasi pertama.")
     st.caption("Corong status: " + " · ".join(
         f"{k} {v}" for k, v in sorted(s["status"].items())))
     corpus_total = sum(s["corpus_by_label"].values())
@@ -1780,9 +1903,20 @@ def _render_analytics(cfg: dict) -> None:
                      + ", ".join(f"{k} {v}" for k, v in
                                  sorted(s["corpus_by_label"].items()))
                      + ")")
-    st.caption(f"🥇 Subset emas: **{s.get('gold', 0)}** laporan — "
-               "terverifikasi DAN lolos tinjauan kedua dengan label "
-               "yang sama (bahan korpus paling tepercaya).")
+    # Ronde 7, M4: klaim jujur — ini ukuran KESEPAKATAN dua peninjau,
+    # bukan bukti label benar ("paling tepercaya" dulu melebihi yang
+    # diukur). Perbedaan tinjauan kedua ditampilkan terpisah sebagai
+    # antrean adjudikasi, bukan disembunyikan.
+    st.caption(f"🥇 Disepakati dua peninjau: **{s.get('gold', 0)}** laporan — "
+               "terverifikasi DAN tinjauan kedua memberi label yang sama. "
+               "Ini ukuran kesepakatan dua peninjau, bukan bukti label "
+               "benar: bila kedua peninjau keliru sama, baris itu tetap "
+               "masuk hitungan.")
+    if s.get("disputed"):
+        st.caption(f"⚖️ {s['disputed']} laporan menunggu adjudikasi — "
+                   "tinjauan kedua berbeda dari label tercatat; label "
+                   "korpus belum berubah sampai peninjau utama "
+                   "memutuskan di bagian tinjauan kedua di bawah.")
     c1, c2 = st.columns(2)
     with c1:
         st.caption("Laporan per hari (14 hari terakhir)")
@@ -1808,13 +1942,19 @@ def _render_analytics(cfg: dict) -> None:
         "app; panel ini khusus data laporan yang terverifikasi.")
 
 
-def _report_meta(cfg: dict, r: dict) -> str:
+def _report_meta(cfg: dict, r: dict, blind: bool = False) -> str:
+    """Metadata kartu laporan. blind=True (Ronde 7, S4): kartu pending
+    HANYA menampilkan kanal/waktu/consent — jumlah laporan pengirim
+    yang sama dan jumlah teks identik adalah sinyal agregat di luar
+    teks pesan dan tidak boleh dibaca sebelum label diputuskan."""
     parts = [
         f"kanal {CHANNELS.get(r['channel'], r['channel'])}",
         f"submit {fmt_wita(r['created_at'])}",
         "consent data: YA" if r["consent_data_use"]
         else "consent data: tidak",
     ]
+    if blind:
+        return " · ".join(parts)
     if r.get("sender_hash"):
         n = sender_report_count(cfg, r["sender_hash"])
         parts.append(f"pengirim {r['sender_hash'][:8]}… "
@@ -1833,8 +1973,9 @@ def render_admin_tab() -> None:
         "label tersimpan — baca teksnya dulu, putuskan sendiri, baru "
         "saran mesin tampil sebagai pembanding di daftar terverifikasi. "
         "Antrean pelabelan di bawah urut waktu masuk (tanpa sinyal "
-        "model); antrean triase terurut skor ada terpisah di expander "
-        "tertutup dan bukan untuk pelabelan. Label pertama yang "
+        "model); expander triase di bawah hanya menampilkan JUMLAH "
+        "total laporan menunggu (tanpa ID, urutan, atau band) dan bukan "
+        "untuk pelabelan. Label pertama yang "
         "tersimpan **dibekukan** sebagai label korpus — bila laporan "
         "dikembalikan ke antrean lalu diverifikasi ulang, label korpus "
         "tetap label pertama dan revisinya hanya dicatat di jejak "
@@ -1938,20 +2079,15 @@ def render_admin_tab() -> None:
         with st.container(border=True):
             st.markdown(f"**Laporan #{r['id']}**")
             st.markdown(f"> {r['text_scrubbed']}")
-            st.caption(_report_meta(cfg, r))
-            if r.get("label"):
-                st.caption(
-                    "⚠️ Laporan ini pernah terverifikasi sebelumnya — "
-                    "label pertamanya sudah DIBEKUKAN sebagai label "
-                    "korpus dan nilainya tidak tampil di sini. Bila "
-                    "Anda memberi label berbeda sekarang, perbedaan itu "
-                    "hanya dicatat terpisah di jejak audit; label "
-                    "korpus tidak berubah.")
-            enr = enrichment_summary(r.get("enrichment"))
-            if enr:
-                st.caption(
-                    f"🌐 Pengayaan intake (info pendukung, **bukan** "
-                    f"penentu label): {enr}")
+            # Kartu pending HANYA teks + metadata netral (Ronde 7):
+            # M2 — peringatan riwayat verifikasi DIHAPUS: fakta
+            # riwayat itu sendiri sinyal bahwa seseorang sudah pernah
+            # menilai baris ini; jejak pembekuan label hanya ada di
+            # log admin, bukan di kartu pelabelan. S3 — pengayaan
+            # intake (umur domain) DIHAPUS dari kartu, tampil sesudah
+            # label tersimpan di daftar terverifikasi. S4 — metadata
+            # pengirim/duplikasi DIHAPUS via blind=True.
+            st.caption(_report_meta(cfg, r, blind=True))
             st.caption("🤖 Saran mesin disembunyikan sampai label "
                        "tersimpan (pelabelan buta) — putuskan dari "
                        "teksnya.")
@@ -1998,32 +2134,33 @@ def render_admin_tab() -> None:
                            f"deleted).")
                 st.rerun()
 
-    # Antrean triase (Ronde 6, M1) — terpisah dari antrean pelabelan.
-    # Tertutup + berperingatan: urutan skor adalah sinyal mesin, jadi
-    # expander ini HANYA untuk perencanaan kapasitas (berapa laporan
-    # berisiko menunggu), tanpa teks dan tanpa tombol label. Jangan
-    # dibuka sebelum selesai melabeli dari antrean di atas.
-    with st.expander("📊 Antrean triase (opsional) — urutan skor model, "
-                     "BUKAN untuk pelabelan"):
+    # Antrean triase (Ronde 6, M1; dikunci teknis Ronde 7, M3) —
+    # peringatan prosedural ("JANGAN dibuka sebelum selesai melabeli")
+    # BUKAN kontrol: peninjau tetap bisa membukanya dan membaca urutan
+    # skor + band. Sejak v6.1.5 expander ini HANYA menampilkan JUMLAH
+    # total laporan pending — tanpa ID, tanpa urutan, tanpa band, tanpa
+    # teks, tanpa tombol label — sehingga tidak ada lagi sinyal mesin
+    # yang bisa terbaca sebelum pelabelan selesai. Helper triase
+    # terurut skor tetap ada sebagai helper data di luar UI.
+    with st.expander("📊 Antrean triase (opsional) — jumlah laporan "
+                     "menunggu, BUKAN untuk pelabelan"):
         st.caption(
-            "⚠️ Antrean ini diurutkan skor model tertinggi dulu — "
-            "urutannya sendiri adalah sinyal mesin. JANGAN membukanya "
-            "sebelum selesai melabeli dari antrean pelabelan di atas; "
-            "antrean ini hanya untuk perencanaan kapasitas, bukan "
-            "untuk memilih urutan pelabelan. Tanpa teks, tanpa tombol "
-            "label.")
+            "Hanya jumlah total laporan pending yang tampil di sini — "
+            "tanpa ID, tanpa urutan skor, tanpa band — supaya tidak ada "
+            "sinyal mesin yang terbaca sebelum pelabelan selesai. "
+            "Antrean ini hanya untuk perencanaan kapasitas, bukan "
+            "untuk memilih urutan pelabelan.")
         try:
-            triage = fetch_pending_triage(cfg)
+            n_pending = count_status(cfg, "pending")
         except Exception as exc:
             st.caption(f"Antrean triase belum bisa dimuat: {exc}")
-            triage = []
-        if not triage:
+            n_pending = None
+        if n_pending is None:
+            pass
+        elif not n_pending:
             st.caption("Tidak ada laporan pending.")
-        for t in triage:
-            st.caption(
-                f"#{t['id']} · submit {fmt_wita(t['created_at'])} · "
-                "band model: "
-                f"{BAND_BADGE.get(t.get('model_band'), t.get('model_band') or '-')}")
+        else:
+            st.caption(f"{n_pending} laporan menunggu verifikasi.")
 
     st.markdown("#### Terverifikasi terakhir")
     if not verified:
@@ -2037,6 +2174,14 @@ def render_admin_tab() -> None:
                 f"modus *{r['category_modus'] or '-'}* · {gal} · "
                 f"diverifikasi {fmt_wita(r['verified_at'])}")
             st.markdown(f"> {r['text_scrubbed']}")
+            # Metadata lengkap + pengayaan intake baru tampil DI SINI
+            # — sesudah label tersimpan (Ronde 7, S3/S4): di kartu
+            # pending keduanya disembunyikan agar tidak menjadi sinyal
+            # pra-label.
+            st.caption(_report_meta(cfg, r))
+            enr_v = enrichment_summary(r.get("enrichment"))
+            if enr_v:
+                st.caption(f"🌐 Pengayaan intake: {enr_v}")
             # Saran mesin baru tampil DI SINI — sesudah label manusia
             # tersimpan — sebagai pembanding pasca-label, bukan jangkar
             # sebelum pelabelan. (Ronde 5, M1.)
@@ -2070,9 +2215,13 @@ def render_admin_tab() -> None:
 
     # Tinjauan kedua (v6.0) — pertahanan mutu korpus. Sampel ACAK
     # laporan terverifikasi dinilai ulang TANPA melihat label tercatat
-    # (buta): yang hasilnya sama masuk SUBSET EMAS; yang berbeda hanya
-    # DICATAT di label_log — label asli tidak berubah oleh tinjauan
-    # kedua, mengubahnya keputusan peninjau utama.
+    # (buta): yang hasilnya sama masuk hitungan DISEPAKATI DUA
+    # PENINJAU; yang berbeda hanya DICATAT di label_log — label asli
+    # tidak berubah oleh tinjauan kedua. Sejak v6.1.5 (Ronde 7, M4)
+    # perbedaan itu punya jalur ADJUDIKASI (adjudicate_report):
+    # peninjau utama memutuskan "pertahankan" atau "diragukan", dan
+    # putusan tercatat di label_log — tanpa adjudikasi, perbedaan
+    # menggantung sebagai "menunggu adjudikasi" di Analitik.
     # Ronde 6, S5: pilihan label TANPA nilai awal (index=None —
     # sebelumnya default LABELS[0] = SMISHING, jangkar bawaan);
     # ID/tanggal/kanal disembunyikan agar sampel tak bisa dicocokkan
@@ -2082,15 +2231,18 @@ def render_admin_tab() -> None:
     # terverifikasi, jadi pencocokan lewat teks masih mungkin —
     # tinjauan kedua sebaiknya dilakukan peninjau yang berbeda dari
     # peninjau pertama.
-    st.markdown("#### 🥇 Subset emas — tinjauan kedua")
+    st.markdown("#### 🥇 Disepakati dua peninjau — tinjauan kedua")
     st.caption(
-        f"Subset emas saat ini: **{gold_count(cfg)}** laporan. "
+        f"Disepakati dua peninjau saat ini: **{gold_count(cfg)}** "
+        "laporan. "
         "Nilai ulang sampel acak di bawah ini dari teksnya saja — "
         "label tercatat sengaja tidak ditampilkan. Setiap tinjauan "
         "tercatat di jejak audit (label_log). Teks yang sama juga "
         "tampil di daftar terverifikasi di atas, jadi pencocokan "
         "lewat teks masih mungkin — sebaiknya peninjau kedua adalah "
-        "orang yang berbeda dari peninjau pertama.")
+        "orang yang berbeda dari peninjau pertama. Kesepakatan dua "
+        "peninjau BUKAN bukti label benar — bila keduanya keliru sama, "
+        "baris itu tetap masuk hitungan.")
     reviewer2 = st.text_input(
         "Nama/inisial peninjau kedua (opsional — dicatat di jejak "
         "audit; isi dengan nama berbeda dari peninjau pertama bila "
@@ -2126,7 +2278,8 @@ def render_admin_tab() -> None:
                 if hasil == "cocok":
                     st.success(
                         f"Laporan #{r['id']}: tinjauan kedua COCOK "
-                        "dengan label tercatat — masuk subset emas.")
+                        "dengan label tercatat — masuk hitungan "
+                        "disepakati dua peninjau.")
                 elif hasil == "beda":
                     st.warning(
                         f"Laporan #{r['id']}: tinjauan kedua BERBEDA "
@@ -2136,3 +2289,36 @@ def render_admin_tab() -> None:
                     st.info(f"Laporan #{r['id']} sudah tidak "
                             "terverifikasi — tinjauan dibatalkan.")
                 st.rerun()
+
+    # Adjudikasi (Ronde 7, M4): perbedaan tinjauan kedua tidak boleh
+    # menggantung tanpa putusan. Peninjau utama memutuskan per laporan:
+    # "pertahankan" (label beku dipertahankan) atau "diragukan" (label
+    # beku diragukan — ditandai untuk ditinjau ulang di luar app).
+    # Label korpus TIDAK berubah oleh adjudikasi; putusan hanya
+    # tercatat di label_log sebagai 'adjudikasi' dan menutup antrean.
+    disputed = fetch_disputed(cfg)
+    if disputed:
+        st.markdown("#### ⚖️ Menunggu adjudikasi")
+        st.caption(
+            f"{len(disputed)} laporan terverifikasi yang tinjauan "
+            "keduanya BERBEDA dari label tercatat dan belum diputuskan. "
+            "Label korpus tidak berubah apa pun putusannya; putusan "
+            "hanya menutup antrean ini dan tercatat di jejak audit.")
+        for r in disputed:
+            with st.container(border=True):
+                st.markdown(f"**Laporan #{r['id']}** · label tercatat "
+                            f"**{r['label']}**")
+                st.markdown(f"> {r['text_scrubbed']}")
+                d1, d2 = st.columns(2)
+                if d1.button("✅ Pertahankan label beku",
+                             key=f"adm_adj_keep_{r['id']}"):
+                    adjudicate_report(
+                        cfg, r["id"], "pertahankan",
+                        actor=(reviewer2 or "").strip() or "verifikator")
+                    st.rerun()
+                if d2.button("⚠️ Tandai label diragukan",
+                             key=f"adm_adj_doubt_{r['id']}"):
+                    adjudicate_report(
+                        cfg, r["id"], "diragukan",
+                        actor=(reviewer2 or "").strip() or "verifikator")
+                    st.rerun()

@@ -251,8 +251,9 @@ def _bars_html(stages, gates):
     """Bar horizontal per tahap — SAH & SMISHING terpisah (tidak ditumpuk).
 
     Bar lama (st.bar_chart dua seri) menumpuk kedua persen sampai >100%
-    dan sulit dibaca; di sini tiap ukuran punya bar sendiri, hijau bila
-    melewati gerbangnya, merah bila belum.
+    dan sulit dibaca; di sini tiap ukuran punya bar sendiri — warna
+    mengikuti vonis tiga status (hijau: lolos jelas; kuning: tidak
+    meyakinkan; merah: gagal jelas).
     """
     rows = []
     for s in stages:
@@ -348,10 +349,11 @@ def render_journey():
     st.caption(
         "Warna = persen pesan lolos per kategori (15 pesan per kategori). "
         "Bandingkan kolom 2C → 2D: kategori yang ditargetkan data 2D "
-        "sembuh (keamanan_bank_resmi 60,0% → 93,3%; apk_malware 73,3% → "
-        "100%), tetapi beberapa kategori smishing non-target mundur "
-        "(mis. investasi_bodong 93,3% → 73,3%) — trade-off yang membuat "
-        "gerbang SMISHING 2D gagal.")
+        "naik pada set ini (keamanan_bank_resmi 60,0% → 93,3%; apk_malware 73,3% → "
+        "100%), tetapi beberapa kategori smishing non-target turun "
+        "(mis. investasi_bodong 93,3% → 73,3%) — pola ini sejalan dengan "
+        "kegagalan gerbang SMISHING 2D, bukan bukti sebabnya (n=15 per "
+        "kategori; selang kepercayaan per kategori lebar).")
 
     st.markdown(
         "ℹ️ **Bingkai vonis tiga status (sejak Laporan Edisi v3.3).** "

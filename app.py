@@ -318,7 +318,7 @@ from journey import render_journey
 from siskamling import render_lapor_tab, render_gallery_tab, \
     render_admin_tab
 
-APP_VERSION = "v6.1.4"
+APP_VERSION = "v6.1.5"
 MAX_SINGLE_CHARS = 2000   # butir C: batas analisis tunggal
 MAX_BATCH_LINES = 200     # butir B/C: batas baris batch
 CSV_TEXT_CHARS = 200      # teks dipotong aman di ekspor CSV
@@ -1685,6 +1685,13 @@ with tab_eval:
                 "Kategori": item["kategori"],
                 "Label harapan": item["label"],
                 "Skor": round(a["res"]["p_scam"], 4),
+                # Ronde 7, S10: penanda ambang JUGA di panel evaluasi —
+                # skor 0,13496 tampil "0.1350" tepat di t_esc padahal
+                # bandnya REVIEW ANALIS; tanpa penanda, tabel ini
+                # menyesatkan seperti jalur lain sebelum Ronde 6, S3.
+                "Catatan ambang": _score_boundary_note(
+                    a["res"]["p_scam"], engine.t_close, engine.t_esc
+                ) or "—",
                 "Band model": a["res"]["zone"],
                 "Band final": final,
                 "Aturan": ("Ya — " + "+".join(
@@ -1719,6 +1726,7 @@ with tab_eval:
             "Kategori": r["Kategori"],
             "Label harapan": r["Label harapan"],
             "Skor": r["Skor"],
+            "Catatan ambang": r.get("Catatan ambang", "—"),
             "Band model": r["Band model"],
             "Band final": r["Band final"],
             "Aturan": r["Aturan"],
@@ -1729,7 +1737,8 @@ with tab_eval:
         st.caption(
             "Skor tampil 4 desimal; keputusan band memakai skor penuh — "
             "skor yang membulat ke ambang tidak berarti menyentuh "
-            "ambang. (Ronde 6, S4.)")
+            "ambang. Kolom 'Catatan ambang' menandai skor yang membulat "
+            "tepat ke ambang t_close/t_esc. (Ronde 6, S4; Ronde 7, S10.)")
         concl = [
             f"**Kesimpulan otomatis (dari angka di atas, apa "
             f"adanya):** {tot_ok} dari {len(eval_rows)} band final "

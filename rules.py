@@ -28,11 +28,12 @@ Tiga sinyal kuat aturan:
        ia TIDAK cukup memicu (butuh pasangan sinyal).
   S2 — Permintaan bertindak lewat tautan / memasukkan kredensial: pola
        imperatif seperti "masukkan PIN", "verifikasi di <tautan>",
-       "klik tautan ini", "verify your PIN at ...". Kalimat PELINDUNG khas
-       pesan sah ("JANGAN bagikan kode ini kepada siapa pun") secara
-       eksplisit BUKAN sinyal — kata kerja meminta-masukkan tidak mencakup
-       "berikan/bagikan", dan kecocokan yang didahului kata "jangan" dalam
-       jendela dekat dibuang (lihat _matches_s2).
+       "klik tautan ini", "verify your PIN at ...". Sejak Ronde 7 kata
+       kerja meminta-masukkan JUGA mencakup "berikan/bagikan/kasih/
+       serahkan" ("Berikan OTP Anda di …" sebelumnya lolos); kalimat
+       PELINDUNG khas pesan sah ("JANGAN bagikan kode ini kepada siapa
+       pun") tetap BUKAN sinyal — kecocokan yang didahului kata "jangan"
+       dalam jendela dekat dibuang (lihat _matches_s2).
   S3 — Ancaman + urgensi waktu: kata ancaman (diblokir, hangus, suspend,
        dibekukan, ...) DAN kata tekanan waktu (hari ini, segera, dalam
        24 jam, ...) harus hadir bersamaan; salah satu saja bukan S3.
@@ -89,10 +90,12 @@ _URL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# S2a — imperatif memasukkan kredensial (ID + EN).
+# S2a — imperatif memasukkan kredensial (ID + EN). Sejak Ronde 7, S5:
+# "berikan/bagikan/kasih/serahkan" ikut dihitung — penjaga "jangan" di
+# _matches_s2 melindungi kalimat pelindung ("JANGAN bagikan kode ini").
 _S2A_RE = re.compile(
     r"\b(?:masukkan|memasukkan|inputkan|input|ketik|ketikkan|enter|submit|"
-    r"type)\b[^.]{0,30}?\b(?:otp|pin|password|kata sandi|sandi|kode|"
+    r"type|berikan|bagikan|kasih|serahkan)\b[^.]{0,30}?\b(?:otp|pin|password|kata sandi|sandi|kode|"
     r"credential|kredensial)\b",
     re.IGNORECASE,
 )
