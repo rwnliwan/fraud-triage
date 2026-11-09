@@ -27,6 +27,12 @@ pecah berkas per statement bila perlu). Kredensial di
   **reboot app Streamlit Cloud** (cache deteksi skema per proses +
   modul impor hanya tersegarkan lewat reboot — sidebar versi BUKAN
   bukti kode live).
+- PENGECUALIAN — migrasi 0003 (trigger): urutannya TERBALIK (kode
+  dulu + reboot, baru migrasi + reboot lagi). Migrasi trigger yang
+  diterapkan sebelum kode baru membuat kode lama menulis jejak
+  sendiri DAN trigger juga menulis (tulis ganda) — trigger hanya
+  menyala bila kolom staging terisi, jadi jendela itu aman, tetapi
+  urutan tetap JANGAN dibalik. Lihat header 0003.
 - Verifikasi sesudahnya (baca-saja): `SELECT sql FROM sqlite_master
   WHERE name = 'corpus_export'` harus sama dengan definisi di `0002`;
   `PRAGMA table_info(reports)` memuat `corpus_excluded`,

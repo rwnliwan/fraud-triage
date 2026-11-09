@@ -441,11 +441,12 @@ def turso_batch(cfg: dict, statements: list) -> list:
     sini. JANGAN pakai fungsi ini untuk tulis multi-tabel yang butuh
     atomicity — sejak G7 ronde 7 TIDAK ADA jalur tulis app yang
     memakainya: submit_report / verify_report / adjudicate_report
-    memakai turso_execute berurutan + aksi kompensasi + gagal-jujur
-    (atomicity sejati butuh trigger DB — lihat catatan G7 di
-    submit_report; pola CTE single-statement TIDAK BISA di SQLite:
-    DML di dalam WITH ditolak parser SQLite 3.45.1 lokal maupun
-    server Turso, SQL_PARSE_ERROR at (1, 20)).
+    memakai turso_execute berurutan + aksi kompensasi + gagal-jujur,
+    ATAU jalur trigger migrasi 0003 bila trigger ada (atomicity
+    sejati — lihat catatan G7 di submit_report; pola CTE
+    single-statement TIDAK BISA di SQLite: DML di dalam WITH ditolak
+    parser SQLite 3.45.1 lokal maupun server Turso, SQL_PARSE_ERROR
+    at (1, 20)).
 
     Bentuk wire + error SUDAH diverifikasi ke Turso live (baca-saja,
     2026-11-09): request {"type": "batch", "batch": {"steps": [...]}},
@@ -546,6 +547,35 @@ def _label_log_has_putusan(cfg: dict) -> bool:
         return False
     _R8_COLS_CACHE[key] = True
     return True
+
+
+# Trigger migrasi 0003 (atomicity sejati) — nama trigger per jalur tulis.
+TRG_CONSENT = "trg_reports_after_insert_consent"
+TRG_VERIFY = "trg_reports_after_verify"
+TRG_ADJUDICATE = "trg_reports_after_adjudicate_diragukan"
+
+
+def _triggers_0003(cfg: dict) -> set:
+    """Nama trigger migrasi 0003 yang ada di DB.
+
+    Dicek LANGSUNG tiap panggilan (SENGAJA tidak di-cache seperti
+    _R8_COLS_CACHE): peralihan ke jalur trigger harus terjadi segera
+    setelah migrasi diterapkan, tanpa menunggu reboot — cache
+    per-proses akan membuka jendela tulis-ganda antara migrasi dan
+    reboot kedua. Satu query metadata murah (sqlite_master) per
+    operasi tulis. Bila pengecekan gagal (mis. jaringan), kembalikan
+    himpunan kosong -> jalur kompensasi lama (aman: trigger hanya
+    menyala bila kolom staging terisi, dan indeks UNIK mencegah
+    consent_log ganda — lihat header migrasi 0003)."""
+    try:
+        rows = turso_execute(
+            cfg,
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+            "AND name IN (?, ?, ?)",
+            [TRG_CONSENT, TRG_VERIFY, TRG_ADJUDICATE])
+    except Exception:
+        return set()
+    return {r["name"] for r in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -1214,6 +1244,16 @@ def adjudicate_report(cfg: dict, report_id: int, putusan: str,
     korpus; jejak 'diragukan' tetap di label_log, dan gold_count
     juga permanen mengecualikan baris itu — memulihkan kolomnya
     saja akan membuat corpus_export dan gold_count tidak konsisten).
+
+    Migrasi 0003 (DI-ACC Septian 9 Nov 2026): DUA JALUR tulis untuk
+    putusan 'diragukan', dipilih per panggilan dari ada-tidaknya
+    trigger (_triggers_0003). (1) Jalur trigger: UPDATE saja —
+    trigger menulis jejak 'adjudikasi' (putusan + actor) DALAM
+    transaksi yang sama (atomicity sejati); adj_actor membawa nama
+    aktor. (2) Jalur kompensasi (pra-migrasi): UPDATE + INSERT
+    berurutan, bila jejak gagal tertulis efek korpus DIBATALKAN
+    kembali (lihat komentar di bawah). Putusan 'pertahankan' selalu
+    satu INSERT jejak (satu statement saja).
     """
     if putusan not in ("pertahankan", "diragukan"):
         return False
@@ -1234,6 +1274,22 @@ def adjudicate_report(cfg: dict, report_id: int, putusan: str,
         # ini tidak boleh dicatat sama sekali (GG-13).
         if not _reports_has_r8_cols(cfg):
             return False
+        if TRG_ADJUDICATE in _triggers_0003(cfg):
+            # Jalur trigger (migrasi 0003): UPDATE saja — trigger
+            # menulis jejak 'adjudikasi' (putusan + actor) dalam
+            # transaksi yang sama (atomicity sejati). adj_actor
+            # membawa nama aktor (UI: reviewer2 atau "verifikator").
+            # JANGAN tulis jejak sendiri (tulis ganda) dan JANGAN
+            # batalkan corpus_excluded.
+            try:
+                upd = turso_execute(
+                    cfg,
+                    "UPDATE reports SET corpus_excluded = 1, "
+                    "adj_actor = ? WHERE id = ? RETURNING id",
+                    [actor, int(report_id)])
+            except Exception:
+                return False
+            return bool(upd)
         # Ronde 7, G7 (kelas yang sama dengan submit/verify): batch
         # TERBUKTI tidak atomik, jadi UPDATE + INSERT berjalan
         # berurutan — bila jejak gagal tertulis, efek korpus
@@ -1342,27 +1398,35 @@ def submit_report(cfg: dict, *, channel: str, raw_text: str,
     (UTC) dan menjadi tanggal submit resmi pada log pencatatan.
 
     Ronde 7, G7 (pengganti M4 ronde 8 — batch TERBUKTI tidak atomik,
-    lihat turso_batch): bila consent, INSERT reports lalu INSERT
-    consent_log sebagai DUA turso_execute berurutan dengan id eksplisit
-    dari RETURNING langkah pertama (tanpa last_insert_rowid() lagi).
-    Bila consent_log gagal, baris reports DIHAPUS kembali (kompensasi)
-    dan RuntimeError merambat — warga melihat "gagal tersimpan" dan
-    TIDAK ADA baris yatim consent=1 tanpa bukti. Ini BUKAN atomicity
-    sejati: crash tepat di antara kedua tulis (atau gagalnya hapus
-    kompensasi) masih bisa meninggalkan yatim — tetapi (a) kegagalan
-    itu DIBAWA dalam pesan error, bukan ditelan; (b) sebagai pertahanan
-    kedua, view corpus_export (migrasi 0002) mensyaratkan ADA baris
-    consent_log, jadi yatim tidak pernah masuk korpus. Atomicity
-    sejati butuh trigger AFTER INSERT di DB (satu statement INSERT
-    reports memicu tulis consent_log dalam transaksi yang sama) —
-    pola single-statement CTE (WITH + INSERT-di-dalam-WITH) TIDAK
-    BISA:
-    DML di dalam WITH ditolak parser SQLite 3.45.1 lokal maupun
+    lihat turso_batch): DUA JALUR tulis, dipilih per panggilan dari
+    ada-tidaknya trigger migrasi 0003 (_triggers_0003, dicek langsung
+    tiap panggilan, tidak di-cache).
+    (1) Jalur trigger (bila trigger ada): SATU INSERT reports — trigger
+    AFTER INSERT menulis consent_log DALAM transaksi yang sama
+    (atomicity sejati; bila tulis jejak gagal, INSERT gagal
+    seluruhnya — tidak ada yatim). Kolom staging consent_version /
+    consent_text_hash membawa nilai yang hanya diketahui aplikasi ke
+    trigger. JANGAN INSERT consent_log sendiri di jalur ini.
+    (2) Jalur kompensasi (bila trigger belum ada — pra-migrasi):
+    INSERT reports lalu INSERT consent_log sebagai DUA turso_execute
+    berurutan dengan id eksplisit dari RETURNING langkah pertama
+    (tanpa last_insert_rowid() lagi). Bila consent_log gagal, baris
+    reports DIHAPUS kembali (kompensasi) dan RuntimeError merambat —
+    warga melihat "gagal tersimpan" dan TIDAK ADA baris yatim
+    consent=1 tanpa bukti. Ini BUKAN atomicity sejati: crash tepat di
+    antara kedua tulis (atau gagalnya hapus kompensasi) masih bisa
+    meninggalkan yatim — tetapi (a) kegagalan itu DIBAWA dalam pesan
+    error, bukan ditelan; (b) sebagai pertahanan kedua, view
+    corpus_export (migrasi 0002) mensyaratkan ADA baris consent_log,
+    jadi yatim tidak pernah masuk korpus.
+    Pola single-statement CTE (WITH + INSERT-di-dalam-WITH) TIDAK
+    BISA: DML di dalam WITH ditolak parser SQLite 3.45.1 lokal maupun
     server Turso (SQL_PARSE_ERROR at (1, 20), terbukti live 9 Nov
-    2026). Trigger adalah keputusan skema + deploy terkoordinasi
-    (migrasi dulu = tulis ganda dengan kode lama; kode dulu + reboot,
-    baru migrasi + reboot lagi) — DITAHAN untuk keputusan Septian /
-    koordinator, bukan ditebak di sini.
+    2026). Deploy trigger terkoordinasi (kode dulu + reboot, baru
+    migrasi + reboot lagi — migrasi dulu = tulis ganda dengan kode
+    lama; trigger hanya menyala bila kolom staging terisi, jadi
+    jendela migrasi-reboot aman) — DI-ACC Septian 9 Nov 2026,
+    migrasi 0003, terbukti uji scratch live 37/37 PASS.
     """
     clean_text, _findings = scrub(raw_text)
     sender_hash = hash_sender(sender_raw, cfg.get("salt")) \
@@ -1373,6 +1437,37 @@ def submit_report(cfg: dict, *, channel: str, raw_text: str,
         enrichment = build_enrichment(clean_text)
     except Exception:
         enrichment = None
+    if TRG_CONSENT in _triggers_0003(cfg):
+        # Jalur trigger (migrasi 0003): SATU INSERT reports — trigger
+        # menulis consent_log dalam transaksi yang sama (atomicity
+        # sejati). JANGAN INSERT consent_log sendiri (tulis ganda) dan
+        # JANGAN kompensasi. Kolom staging consent_version /
+        # consent_text_hash membawa nilai yang hanya diketahui aplikasi
+        # ke trigger; trigger hanya menyala bila staging terisi (kode
+        # lama yang tidak mengisinya LEWAT begitu saja — jendela
+        # migrasi-reboot aman, terbukti uji scratch live).
+        track_code = new_track_code()
+        cols = ("channel, text_scrubbed, model_score, model_band, "
+                "rules_fired, consent_data_use, consent_at, "
+                "sender_hash, text_hash, enrichment, track_code, "
+                "via_ocr, consent_version, consent_text_hash")
+        vals = ("?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?")
+        args = [channel, clean_text, float(score),
+                BAND_STORE[band_final], json.dumps(rules_fired),
+                1 if consent_data_use else 0,
+                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                if consent_data_use else None,
+                sender_hash, text_hash_of(clean_text), enrichment,
+                track_code, 1 if via_ocr else 0,
+                CONSENT_VERSION if consent_data_use else None,
+                consent_text_hash() if consent_data_use else None]
+        rows = turso_execute(
+            cfg,
+            "INSERT INTO reports (" + cols + ") "
+            "VALUES (" + vals + ") RETURNING id, created_at",
+            args)
+        row = rows[0]
+        return row["id"], row["created_at"], track_code
     has_cols = _reports_has_r8_cols(cfg)
     track_code = new_track_code() if has_cols else None
     if has_cols:
@@ -2358,30 +2453,41 @@ def verify_report(cfg: dict, report_id: int, label: str, category: str,
     pertama. Kategori/galeri masih boleh berubah (bukan label).
 
     Gap G5 ronde 8 (warisan G7 ronde 7) — DIPERBARUI ronde 7, G7:
-    batch pipeline TERBUKTI tidak atomik (lihat turso_batch), jadi
-    UPDATE reports + INSERT label_log kini DUA turso_execute
-    berurutan: UPDATE dulu, dan INSERT log HANYA bila UPDATE mengenai
-    baris (dengan urutan ini jejak hantu tidak mungkin lagi — dulu
-    batch menulis jejak walau UPDATE tak mengenai, sehingga perlu
-    DELETE kompensasi; kompensasi itu sudah dihapus). Bila tulis log
-    gagal atau guard WHERE EXISTS-nya tak lolos, baris DIKEMBALIKAN
-    ke keadaan pra-verifikasi (status pending, verified_at NULL,
-    galeri 0, label = label pra-verifikasi) lewat _batalkan() dan
-    fungsi melempar RuntimeError — pemanggil WAJIB menampilkan
-    kegagalan, sukses TIDAK BOLEH dilaporkan tanpa jejak audit (kelas
-    yang sama dengan S1 ronde 8 pada adjudikasi). Ini BUKAN atomicity
-    sejati: crash tepat di antara kedua tulis (atau gagalnya
-    pemulihan) masih bisa meninggalkan baris terverifikasi tanpa
-    jejak — tetapi kegagalan itu DIBAWA dalam pesan error, bukan
-    ditelan, dan pembekuan label tetap dipertahankan fallback kolom
-    reports.label (laporan R7: korpus tidak rusak, yang hilang hanya
-    jejak audit). Atomicity sejati butuh trigger AFTER UPDATE di DB
-    — pola single-statement CTE TIDAK BISA di SQLite (lihat
-    submit_report); trigger DITAHAN untuk keputusan Septian /
-    koordinator. INSERT log tetap memakai guard WHERE EXISTS atas
-    baris yang BARU terverifikasi, jadi bila UPDATE tidak mengenai
-    baris apa pun (laporan sudah tidak pending — mis. klik ganda /
-    sudah diproses peninjau lain), TIDAK ADA jejak yang tertulis.
+    batch pipeline TERBUKTI tidak atomik (lihat turso_batch). DUA
+    JALUR tulis, dipilih per panggilan dari ada-tidaknya trigger
+    migrasi 0003 (_triggers_0003, dicek langsung tiap panggilan,
+    tidak di-cache).
+    (1) Jalur trigger (bila trigger ada): UPDATE saja — trigger AFTER
+    UPDATE menulis label_log DALAM transaksi yang sama (atomicity
+    sejati; bila tulis jejak gagal, UPDATE gagal seluruhnya — baris
+    tetap pending). log_label_attempt membawa label yang DICOBA
+    (jalur beku: label baru yang dicoba, bukan label beku); trigger
+    memilih aksi 'verifikasi' vs 'revisi_pasca_paparan' dari
+    ada-tidaknya jejak 'verifikasi' sebelumnya. JANGAN tulis jejak
+    sendiri dan JANGAN _batalkan di jalur ini.
+    (2) Jalur kompensasi (bila trigger belum ada — pra-migrasi):
+    UPDATE reports + INSERT label_log DUA turso_execute berurutan:
+    UPDATE dulu, dan INSERT log HANYA bila UPDATE mengenai baris
+    (dengan urutan ini jejak hantu tidak mungkin lagi — dulu batch
+    menulis jejak walau UPDATE tak mengenai, sehingga perlu DELETE
+    kompensasi; kompensasi itu sudah dihapus). Bila tulis log gagal
+    atau guard WHERE EXISTS-nya tak lolos, baris DIKEMBALIKAN ke
+    keadaan pra-verifikasi (status pending, verified_at NULL, galeri
+    0, label = label pra-verifikasi) lewat _batalkan() dan fungsi
+    melempar RuntimeError — pemanggil WAJIB menampilkan kegagalan,
+    sukses TIDAK BOLEH dilaporkan tanpa jejak audit (kelas yang sama
+    dengan S1 ronde 8 pada adjudikasi). Ini BUKAN atomicity sejati:
+    crash tepat di antara kedua tulis (atau gagalnya pemulihan)
+    masih bisa meninggalkan baris terverifikasi tanpa jejak — tetapi
+    kegagalan itu DIBAWA dalam pesan error, bukan ditelan, dan
+    pembekuan label tetap dipertahankan fallback kolom reports.label
+    (laporan R7: korpus tidak rusak, yang hilang hanya jejak audit).
+    Pola single-statement CTE TIDAK BISA di SQLite (lihat
+    submit_report); trigger DI-ACC Septian 9 Nov 2026, migrasi 0003,
+    terbukti uji scratch live 37/37 PASS. Di kedua jalur, jejak
+    ditulis HANYA bila UPDATE mengenai baris (laporan sudah tidak
+    pending — mis. klik ganda / sudah diproses peninjau lain — TIDAK
+    ADA jejak yang tertulis).
 
     Ronde 9, S9 (GG-36, sisi tulis — 3-suara unanimous): galeri
     HANYA untuk laporan dengan consent. Bila gallery_visible=True
@@ -2423,6 +2529,40 @@ def verify_report(cfg: dict, report_id: int, label: str, category: str,
             # NULL adalah tebakan terbaik, bukan nilai yang ditelan
             # diam-diam tanpa jejak (kegagalan tulis log tetap
             # melempar RuntimeError).
+
+    if TRG_VERIFY in _triggers_0003(cfg):
+        # Jalur trigger (migrasi 0003): UPDATE saja — trigger menulis
+        # label_log dalam transaksi yang sama (atomicity sejati).
+        # log_label_attempt membawa label yang DICOBA (jalur beku:
+        # label baru yang dicoba, bukan label beku). JANGAN tulis
+        # jejak sendiri (tulis ganda) dan JANGAN _batalkan.
+        if first is not None:
+            rows_upd = turso_execute(
+                cfg,
+                "UPDATE reports SET status = 'verified', label = ?, "
+                "category_modus = ?, gallery_visible = ?, "
+                "verified_at = datetime('now'), "
+                "log_label_attempt = ? WHERE id = ? "
+                "AND status = 'pending' RETURNING id",
+                [first, category, 1 if gallery_visible else 0,
+                 label, int(report_id)])
+            if not rows_upd:
+                raise RuntimeError(
+                    "verifikasi gagal: laporan sudah tidak pending")
+            return first
+        rows_upd = turso_execute(
+            cfg,
+            "UPDATE reports SET status = 'verified', label = ?, "
+            "category_modus = ?, gallery_visible = ?, "
+            "verified_at = datetime('now'), "
+            "log_label_attempt = ? WHERE id = ? AND status = 'pending' "
+            "RETURNING id",
+            [label, category, 1 if gallery_visible else 0,
+             label, int(report_id)])
+        if not rows_upd:
+            raise RuntimeError(
+                "verifikasi gagal: laporan sudah tidak pending")
+        return label
 
     def _batalkan() -> str:
         """Kembalikan baris ke keadaan pra-verifikasi (kompensasi

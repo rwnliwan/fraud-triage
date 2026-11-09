@@ -6,6 +6,9 @@ lacak + gap G4 (draf publik vs kode) + G5 (verify_report atomik) +
 G6 (bukti gerbang) + G7 (sensus Turnstile) + gap ronde 7 G5 (batas
 banjir dieksekusi) + G7 (batch TERBUKTI tidak atomik -> jalur tulis
 berurutan + kompensasi; pola CTE DML ditolak SQLite).
++ migrasi 0003 (DI-ACC Septian 9 Nov 2026): trigger atomicity sejati —
+jalur tulis dua-arah (trigger bila ada, kompensasi bila belum);
+terbukti uji scratch live 37/37 PASS.
 
 Mensimulasikan skema Turso live (reports + label_log + view
 corpus_export, persis definisi sqlite_master live 2026-11-08) di
@@ -502,9 +505,18 @@ MIG_DIR = REPO / "migrations"
 MIG_FILES = sorted(p.name for p in MIG_DIR.glob("*.sql"))
 check("R8-S3 migrasi ada + berurutan",
       MIG_FILES == ["0001_schema_baseline.sql",
-                    "0002_r8_corpus_track_ocr.sql"], str(MIG_FILES))
+                    "0002_r8_corpus_track_ocr.sql",
+                    "0003_triggers_atomicity.sql"], str(MIG_FILES))
+# MIG_SQL tetap 0001+0002: fixture con8/con9 (R8/R9) ditulis dengan
+# asumsi TANPA trigger — seed INSERT consent=1 langsung + tulis
+# consent_log manual akan GANDA / gagal UNIK bila trigger ada (itu
+# perilaku jalur trigger, diuji terpisah di seksi migrasi 0003 dengan
+# fixture 0001+0002+0003 sendiri, MIG_SQL_0003).
 MIG_SQL = "".join((MIG_DIR / n).read_text(encoding="utf-8") + "\n"
-                  for n in MIG_FILES)
+                  for n in ["0001_schema_baseline.sql",
+                            "0002_r8_corpus_track_ocr.sql"])
+MIG_SQL_0003 = MIG_SQL + (MIG_DIR / "0003_triggers_atomicity.sql"
+                          ).read_text(encoding="utf-8") + "\n"
 
 
 def _fresh_con8(sql=MIG_SQL):
@@ -1099,9 +1111,14 @@ check("R7-G5 300 laporan/hari -> gate False (batas global)",
 # _intake_open_state (1x unknown), verify_report koersi galeri
 # (1x baca consent gagal -> koersi 0). Semua fail-closed/jujur
 # (False + revert, tanpa jejak palsu).
+# Audit migrasi 0003 (+2 handler, 52 -> 54): _triggers_0003 (1x:
+# deteksi trigger gagal -> himpunan kosong = jalur kompensasi lama;
+# aman karena trigger hanya menyala bila staging terisi + backstop
+# indeks UNIK) dan adjudicate_report jalur trigger (1x: UPDATE gagal
+# -> False, sama fail-closed-nya dengan jalur kompensasi).
 _n_except = SRC.count("except Exception")
 check("R8-GG-16 sensus except-Exception (tripwire hitungan)",
-      _n_except == 52, f"count={_n_except} (daftarkan handler baru)")
+      _n_except == 54, f"count={_n_except} (daftarkan handler baru)")
 
 # --- S4 (KELAS): batas harian UTC vs WITA ------------------------------
 # Pola umum: "per hari" = hari WITA di SEMUA penghitung batas — diuji
@@ -1965,14 +1982,358 @@ check("R9-TAMBAHAN cadangan ditulis apa adanya (pengaturan akun)",
       "cadangan otomatis mengikuti pengaturan akun"
       in sk.PRIVACY_TEXT_V1)
 
+# --- Migrasi 0003: trigger atomicity sejati (DI-ACC Septian 9 Nov 2026) ---
+# KELAS GG-5/G7: tulis multi-tabel WAJIB atomik — batch terbukti tidak
+# atomik, CTE DML ditolak SQLite, kompensasi bukan atomicity sejati.
+# Pola umum: trigger AFTER INSERT/UPDATE menulis jejak DALAM transaksi
+# yang sama; trigger HANYA menyala bila kolom staging terisi (kode
+# baru); statement kode lama LEWAT tanpa jejak ganda; indeks UNIK
+# backstop consent ganda. Diuji DIEKSEKUSI atas SQLite lokal dengan
+# fixture migrasi 0001+0002+0003 sendiri (con8/con9 tetap 0001+0002 —
+# seed-nya berasumsi tanpa trigger, lihat komentar MIG_SQL di atas).
+def _fresh_con3(sql=MIG_SQL_0003):
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.executescript(sql)
+    return c
+
+
+try:
+    con3 = _fresh_con3()
+    _mig3_ok, _mig3_err = True, ""
+except Exception as exc:  # noqa: BLE001 -- bukti guard, bukan logika app
+    con3, _mig3_ok, _mig3_err = None, False, str(exc)
+check("MIG-0003 migrasi 0001+0002+0003 tereksekusi di SQLite",
+      _mig3_ok, _mig3_err)
+if _mig3_ok:
+    _trg3 = {r[0] for r in con3.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'trigger'")}
+    check("MIG-0003 tiga trigger ada",
+          {"trg_reports_after_insert_consent",
+           "trg_reports_after_verify",
+           "trg_reports_after_adjudicate_diragukan"} <= _trg3,
+          str(sorted(_trg3)))
+
+    def _trig_sql3(name):
+        return con3.execute(
+            "SELECT sql FROM sqlite_master WHERE name = ?",
+            (name,)).fetchone()[0]
+
+    check("MIG-0003 trigger consent diskriminator staging",
+          "consent_version is not null"
+          in _norm_sql(_trig_sql3("trg_reports_after_insert_consent")))
+    check("MIG-0003 trigger verify diskriminator staging",
+          "log_label_attempt is not null"
+          in _norm_sql(_trig_sql3("trg_reports_after_verify")))
+    check("MIG-0003 trigger adjudikasi diskriminator staging",
+          "adj_actor is not null"
+          in _norm_sql(_trig_sql3(
+              "trg_reports_after_adjudicate_diragukan")))
+    _cols3 = {r[1] for r in con3.execute("PRAGMA table_info(reports)")}
+    check("MIG-0003 4 kolom staging ada",
+          {"consent_version", "consent_text_hash",
+           "log_label_attempt", "adj_actor"} <= _cols3,
+          str(sorted(_cols3)))
+    _idx3 = con3.execute(
+        "SELECT sql FROM sqlite_master WHERE name = "
+        "'idx_consent_log_report_unique'").fetchone()
+    check("MIG-0003 indeks UNIK consent_log(report_id) ada + UNIQUE",
+          _idx3 is not None
+          and "create unique index" in _norm_sql(_idx3[0]),
+          str(_idx3[0]) if _idx3 else "tidak ada")
+
+
+def fake3(cfg, sql, args=None):
+    cur = con3.execute(sql, args or [])
+    if cur.description is None:
+        con3.commit()
+        return []
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+sk.turso_execute = fake3
+if hasattr(sk, "_R8_COLS_CACHE"):
+    sk._R8_COLS_CACHE.clear()
+
+# --- deteksi trigger: con3 ada, con9 (0001+0002) tidak ------------------
+check("MIG-0003 _triggers_0003 kenali 3 trigger di con3",
+      sk._triggers_0003(CFG) == {"trg_reports_after_insert_consent",
+                                 "trg_reports_after_verify",
+                                 "trg_reports_after_adjudicate_diragukan"})
+sk.turso_execute = fake9
+check("MIG-0003 _triggers_0003 kosong di DB tanpa trigger (fallback)",
+      sk._triggers_0003(CFG) == set())
+sk.turso_execute = fake3
+if hasattr(sk, "_R8_COLS_CACHE"):
+    sk._R8_COLS_CACHE.clear()
+
+# --- submit jalur trigger (dieksekusi) ----------------------------------
+_st3, _res3 = _safe_call(
+    sk.submit_report,
+    CFG, channel="sms", raw_text="pesan trigger konsen ok",
+    sender_raw=None, consent_data_use=True, score=0.5,
+    band_final="REVIEW ANALIS", rules_fired=[])
+_rid3 = _res3[0] if _st3 == "ok" and isinstance(_res3, tuple) else None
+check("MIG-0003 submit consent jalur trigger kembalikan id+kode",
+      _st3 == "ok" and isinstance(_rid3, int)
+      and isinstance(_res3[2], str) and len(_res3[2]) == 8,
+      f"st={_st3} res={_res3}")
+_cl3 = fake3(CFG, "SELECT * FROM consent_log WHERE report_id = ?",
+             [_rid3]) if _rid3 is not None else []
+check("MIG-0003 submit consent: tepat 1 consent_log dari trigger",
+      len(_cl3) == 1, str(_cl3))
+check("MIG-0003 submit consent: versi + hash benar",
+      len(_cl3) == 1 and _cl3[0]["consent_version"] == sk.CONSENT_VERSION
+      and _cl3[0]["consent_text_hash"] == sk.consent_text_hash(),
+      str(_cl3))
+_st3b, _res3b = _safe_call(
+    sk.submit_report,
+    CFG, channel="sms", raw_text="pesan trigger tanpa konsen",
+    sender_raw=None, consent_data_use=False, score=0.5,
+    band_final="REVIEW ANALIS", rules_fired=[])
+_rid3b = _res3b[0] if _st3b == "ok" and isinstance(_res3b, tuple) else None
+check("MIG-0003 submit tanpa consent: tanpa consent_log",
+      _st3b == "ok" and _rid3b is not None and fake3(
+          CFG, "SELECT * FROM consent_log WHERE report_id = ?",
+          [_rid3b]) == [])
+
+# --- submit sabotase: trigger gagal -> INSERT gagal total (atomik) ------
+def _sabotage3(name, sabotage_sql):
+    real = con3.execute(
+        "SELECT sql FROM sqlite_master WHERE name = ?",
+        (name,)).fetchone()[0]
+    con3.execute(f"DROP TRIGGER IF EXISTS {name}")
+    con3.execute(sabotage_sql)
+    con3.commit()
+    return real
+
+
+def _restore3(name, real_sql):
+    con3.execute(f"DROP TRIGGER IF EXISTS {name}")
+    con3.execute(real_sql)
+    con3.commit()
+
+
+_real_c = _sabotage3(
+    "trg_reports_after_insert_consent",
+    "CREATE TRIGGER trg_reports_after_insert_consent AFTER INSERT "
+    "ON reports WHEN NEW.consent_data_use = 1 "
+    "AND NEW.consent_version IS NOT NULL BEGIN "
+    "SELECT RAISE(ABORT, 'sabotase'); END")
+_n3_before = fake3(CFG, "SELECT COUNT(*) AS n FROM reports")[0]["n"]
+_st3s, _res3s = _safe_call(
+    sk.submit_report,
+    CFG, channel="sms", raw_text="pesan trigger sabotase",
+    sender_raw=None, consent_data_use=True, score=0.5,
+    band_final="REVIEW ANALIS", rules_fired=[])
+_n3_after = fake3(CFG, "SELECT COUNT(*) AS n FROM reports")[0]["n"]
+check("MIG-0003 submit sabotase: raise + TIDAK ADA baris yatim",
+      _st3s == "error" and "sabotase" in str(_res3s)
+      and _n3_after == _n3_before
+      and fake3(CFG, "SELECT * FROM reports WHERE text_scrubbed = ?",
+                ["pesan trigger sabotase"]) == [],
+      f"st={_st3s} res={_res3s} before={_n3_before} after={_n3_after}")
+_restore3("trg_reports_after_insert_consent", _real_c)
+
+# --- kode lama: statement tanpa staging LEWAT trigger (jendela aman) ---
+_old3 = con3.execute(
+    "INSERT INTO reports (channel, text_scrubbed, consent_data_use) "
+    "VALUES ('sms', 'pesan kode lama', 1)").lastrowid
+con3.commit()
+check("MIG-0003 kode lama submit: INSERT tanpa staging BERHASIL",
+      fake3(CFG, "SELECT COUNT(*) AS n FROM reports WHERE id = ?",
+            [_old3])[0]["n"] == 1)
+check("MIG-0003 kode lama submit: trigger LEWAT (tanpa consent_log)",
+      fake3(CFG, "SELECT * FROM consent_log WHERE report_id = ?",
+            [_old3]) == [])
+con3.execute("INSERT INTO consent_log (report_id, consent_version, "
+             "consent_text_hash) VALUES (?, 'v1', 'h')", (_old3,))
+con3.commit()
+check("MIG-0003 kode lama submit: tulis consent_log sendiri -> 1 baris",
+      len(fake3(CFG, "SELECT * FROM consent_log WHERE report_id = ?",
+                [_old3])) == 1)
+
+# --- verify jalur trigger: pertama + ulang (dieksekusi) ------------------
+_v3 = con3.execute(
+    "INSERT INTO reports (channel, text_scrubbed, consent_data_use) "
+    "VALUES ('sms', 'pesan verify trigger', 0)").lastrowid
+con3.commit()
+_eff3 = sk.verify_report(CFG, _v3, "SMISHING", "undian", False)
+_row3 = fake3(CFG, "SELECT * FROM reports WHERE id = ?", [_v3])[0]
+_log3 = fake3(CFG, "SELECT * FROM label_log WHERE report_id = ?",
+              [_v3])
+check("MIG-0003 verify pertama jalur trigger: label SMISHING",
+      _eff3 == "SMISHING" and _row3["status"] == "verified"
+      and _row3["label"] == "SMISHING", f"eff={_eff3} row={dict(_row3)}")
+check("MIG-0003 verify pertama: jejak 'verifikasi'/SMISHING",
+      len(_log3) == 1 and _log3[0]["aksi"] == "verifikasi"
+      and _log3[0]["label"] == "SMISHING"
+      and _log3[0]["actor"] == "verifikator", str(_log3))
+check("MIG-0003 verify pertama: log_label_attempt dibersihkan",
+      _row3["log_label_attempt"] is None)
+check("MIG-0003 verify ulang: unverify lalu verifikasi label baru",
+      sk.unverify_report(CFG, _v3) is True
+      and sk.verify_report(CFG, _v3, "SAH", "undian", False)
+      == "SMISHING")
+_log3b = fake3(CFG, "SELECT * FROM label_log WHERE report_id = ? "
+                    "ORDER BY id", [_v3])
+check("MIG-0003 verifikasi ulang: jejak 'revisi_pasca_paparan'/SAH",
+      len([r for r in _log3b
+           if r["aksi"] == "revisi_pasca_paparan"]) == 1
+      and [r for r in _log3b
+           if r["aksi"] == "revisi_pasca_paparan"][0]["label"] == "SAH",
+      str(_log3b))
+
+# --- verify sabotase: UPDATE gagal -> tetap pending, tanpa jejak --------
+_v3s = con3.execute(
+    "INSERT INTO reports (channel, text_scrubbed, consent_data_use) "
+    "VALUES ('sms', 'pesan verify sabotase', 0)").lastrowid
+con3.commit()
+_real_v = _sabotage3(
+    "trg_reports_after_verify",
+    "CREATE TRIGGER trg_reports_after_verify AFTER UPDATE OF status "
+    "ON reports WHEN OLD.status = 'pending' "
+    "AND NEW.status = 'verified' "
+    "AND NEW.log_label_attempt IS NOT NULL BEGIN "
+    "SELECT RAISE(ABORT, 'sabotase'); END")
+_st3v, _res3v = _safe_call(sk.verify_report, CFG, _v3s, "SAH",
+                           "undian", False)
+check("MIG-0003 verify sabotase: raise + tetap pending + tanpa jejak",
+      _st3v == "error" and "sabotase" in str(_res3v)
+      and fake3(CFG, "SELECT status FROM reports WHERE id = ?",
+                [_v3s])[0]["status"] == "pending"
+      and fake3(CFG, "SELECT * FROM label_log WHERE report_id = ?",
+                [_v3s]) == [],
+      f"st={_st3v} res={_res3v}")
+_restore3("trg_reports_after_verify", _real_v)
+
+# --- kode lama verify: UPDATE tanpa staging LEWAT trigger ---------------
+_v3o = con3.execute(
+    "INSERT INTO reports (channel, text_scrubbed, consent_data_use) "
+    "VALUES ('sms', 'pesan verify kode lama', 0)").lastrowid
+con3.commit()
+con3.execute("UPDATE reports SET status = 'verified', label = 'SAH', "
+             "verified_at = datetime('now') WHERE id = ? "
+             "AND status = 'pending'", (_v3o,))
+con3.commit()
+check("MIG-0003 kode lama verify: UPDATE tanpa staging BERHASIL + "
+      "tanpa jejak",
+      fake3(CFG, "SELECT status FROM reports WHERE id = ?",
+            [_v3o])[0]["status"] == "verified"
+      and fake3(CFG, "SELECT * FROM label_log WHERE report_id = ?",
+                [_v3o]) == [])
+
+# --- adjudikasi 'diragukan' jalur trigger (dieksekusi) -------------------
+_a3 = con3.execute(
+    "INSERT INTO reports (channel, text_scrubbed, consent_data_use, "
+    "status, label, verified_at) VALUES ('sms', 'pesan adjudikasi "
+    "trigger', 1, 'verified', 'SMISHING', '2026-11-08 02:00:00')"
+    ).lastrowid
+con3.execute("INSERT INTO label_log (report_id, aksi, label) VALUES "
+             "(?, 'verifikasi', 'SMISHING')", (_a3,))
+con3.execute("INSERT INTO label_log (report_id, aksi, label) VALUES "
+             "(?, 'tinjauan_kedua', 'SAH')", (_a3,))
+con3.commit()
+check("MIG-0003 adjudikasi 'diragukan' jalur trigger: True + keluar "
+      "korpus",
+      sk.adjudicate_report(CFG, _a3, "diragukan",
+                           actor="peninjau-2") is True
+      and fake3(CFG, "SELECT corpus_excluded FROM reports WHERE id = ?",
+                [_a3])[0]["corpus_excluded"] == 1)
+_la3 = fake3(CFG, "SELECT * FROM label_log WHERE report_id = ? "
+                  "AND aksi = 'adjudikasi'", [_a3])
+check("MIG-0003 adjudikasi: jejak 'adjudikasi'/diragukan + actor + "
+      "putusan",
+      len(_la3) == 1 and _la3[0]["label"] == "diragukan"
+      and _la3[0]["actor"] == "peninjau-2"
+      and _la3[0]["putusan"] == "diragukan", str(_la3))
+check("MIG-0003 adjudikasi: adj_actor dibersihkan trigger",
+      fake3(CFG, "SELECT adj_actor FROM reports WHERE id = ?",
+            [_a3])[0]["adj_actor"] is None)
+
+# --- adjudikasi sabotase: False + tetap di korpus, tanpa jejak ----------
+_a3s = con3.execute(
+    "INSERT INTO reports (channel, text_scrubbed, consent_data_use, "
+    "status, label, verified_at) VALUES ('sms', 'pesan adjudikasi "
+    "sabotase', 1, 'verified', 'SAH', '2026-11-08 02:00:00')"
+    ).lastrowid
+con3.execute("INSERT INTO label_log (report_id, aksi, label) VALUES "
+             "(?, 'verifikasi', 'SAH')", (_a3s,))
+con3.execute("INSERT INTO label_log (report_id, aksi, label) VALUES "
+             "(?, 'tinjauan_kedua', 'SMISHING')", (_a3s,))
+con3.commit()
+_real_a = _sabotage3(
+    "trg_reports_after_adjudicate_diragukan",
+    "CREATE TRIGGER trg_reports_after_adjudicate_diragukan "
+    "AFTER UPDATE OF corpus_excluded ON reports "
+    "WHEN OLD.corpus_excluded = 0 AND NEW.corpus_excluded = 1 "
+    "AND NEW.adj_actor IS NOT NULL BEGIN "
+    "SELECT RAISE(ABORT, 'sabotase'); END")
+check("MIG-0003 adjudikasi sabotase: False + tetap corpus_excluded=0 "
+      "+ tanpa jejak",
+      sk.adjudicate_report(CFG, _a3s, "diragukan",
+                           actor="peninjau-2") is False
+      and fake3(CFG, "SELECT corpus_excluded FROM reports WHERE id = ?",
+                [_a3s])[0]["corpus_excluded"] == 0
+      and fake3(CFG, "SELECT * FROM label_log WHERE report_id = ? "
+                     "AND aksi = 'adjudikasi'", [_a3s]) == [])
+_restore3("trg_reports_after_adjudicate_diragukan", _real_a)
+
+# --- kode lama adjudikasi: UPDATE tanpa staging LEWAT trigger -----------
+_a3o = con3.execute(
+    "INSERT INTO reports (channel, text_scrubbed, consent_data_use, "
+    "status, label, verified_at) VALUES ('sms', 'pesan adjudikasi "
+    "kode lama', 1, 'verified', 'SAH', '2026-11-08 02:00:00')"
+    ).lastrowid
+con3.commit()
+con3.execute("UPDATE reports SET corpus_excluded = 1 WHERE id = ?",
+             (_a3o,))
+con3.commit()
+check("MIG-0003 kode lama adjudikasi: UPDATE tanpa staging BERHASIL + "
+      "tanpa jejak",
+      fake3(CFG, "SELECT corpus_excluded FROM reports WHERE id = ?",
+            [_a3o])[0]["corpus_excluded"] == 1
+      and fake3(CFG, "SELECT * FROM label_log WHERE report_id = ? "
+                     "AND aksi = 'adjudikasi'", [_a3o]) == [])
+
+# --- struktural: jalur trigger ada di kode + docstring mutakhir ---------
+_sub3 = SRC.split("def submit_report(cfg")[1].split("def fetch_gallery")[0]
+_vrf3 = SRC.split("def verify_report(cfg")[1].split("def reject_report")[0]
+_adj3 = SRC.split("def adjudicate_report(cfg")[1].split(
+    "def fetch_second_review_sample")[0]
+check("MIG-0003 submit_report punya jalur trigger",
+      "TRG_CONSENT in _triggers_0003" in _sub3)
+check("MIG-0003 verify_report punya jalur trigger",
+      "TRG_VERIFY in _triggers_0003" in _vrf3)
+check("MIG-0003 adjudicate_report punya jalur trigger",
+      "TRG_ADJUDICATE in _triggers_0003" in _adj3)
+check("MIG-0003 docstring submit sebut migrasi 0003 (bukan DITAHAN)",
+      "migrasi 0003" in _sub3
+      and "DITAHAN untuk keputusan" not in _sub3)
+check("MIG-0003 docstring verify sebut migrasi 0003 (bukan DITAHAN)",
+      "migrasi 0003" in _vrf3
+      and "DITAHAN untuk keputusan" not in _vrf3)
+_trg_fn = SRC.split("def _triggers_0003(cfg")[1].split("\ndef ", 1)[0] \
+    if "def _triggers_0003(cfg" in SRC else ""
+check("MIG-0003 _triggers_0003 TIDAK di-cache (cek langsung tiap "
+      "panggilan)",
+      "_R8_COLS_CACHE[" not in _trg_fn and "def _triggers_0003" in SRC,
+      _trg_fn[:80])
+sk.turso_execute = fake9
+if hasattr(sk, "_R8_COLS_CACHE"):
+    sk._R8_COLS_CACHE.clear()
+
 # --- Sensus handler except (tripwire hitungan) — diperbarui R9 -----------
 # Audit R9 (40 -> 52, +12 — rincian sama seperti di cek R8-GG-16 di
 # atas): reject (2x), delete (3x), unverify (+2x neto), galeri (3x),
-# _intake_open_state (1x), verify koersi galeri (1x). Cek ini GAGAL
-# bila handler except bertambah/berkurang tanpa didaftarkan.
+# _intake_open_state (1x), verify koersi galeri (1x). Audit migrasi
+# 0003 (52 -> 54, +2 — rincian di cek R8-GG-16 di atas): _triggers_0003
+# (1x) + adjudicate jalur trigger (1x). Cek ini GAGAL bila handler
+# except bertambah/berkurang tanpa didaftarkan.
 _n_except9 = SRC.count("except Exception")
 check("R9/GG-16 sensus except-Exception (tripwire hitungan)",
-      _n_except9 == 52, f"count={_n_except9} (daftarkan handler baru)")
+      _n_except9 == 54, f"count={_n_except9} (daftarkan handler baru)")
 
 print()
 print("FAILURES:", fails if fails else "none — ALL PASS")
