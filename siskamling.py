@@ -422,23 +422,32 @@ def _rows_of(result: dict) -> list:
 
 
 def turso_batch(cfg: dict, statements: list) -> list:
-    """Jalankan beberapa statement dalam SATU transaksi pipeline.
+    """Jalankan beberapa statement sebagai SATU request batch pipeline.
 
     statements: list[(sql, args)]. Kembalikan list hasil per langkah
-    (list[dict] untuk SELECT/RETURNING, [] untuk tulis). Bila SATU
-    langkah gagal, SELURUH batch dibatalkan (semantik transaksi batch
-    Hrana: step_errors terisi, step_results langkah itu null) — fungsi
-    ini melempar RuntimeError dan pemanggil WAJIB menganggap TIDAK ADA
-    langkah yang tersimpan.
+    (list[dict] untuk SELECT/RETURNING, [] untuk tulis).
+
+    PERINGATAN — BUKAN TRANSAKSI (Ronde 7, G7): TERBUKTI live
+    9 Nov 2026 (2 tes induk + reproduksi ulang tugas ini): bila SATU
+    langkah gagal, langkah SEBELUMNYA TETAP TERSIMPAN — tiap step
+    commit sendiri. Batch [INSERT ok, INSERT ke tabel tak ada] membuat
+    baris pertama tetap tersimpan; batch [BEGIN IMMEDIATE, INSERT ok,
+    INSERT gagal, COMMIT] juga tetap tersimpan. Klaim lama docstring
+    ini ("SELURUH batch dibatalkan") SALAH dan sudah dikoreksi di
+    sini. JANGAN pakai fungsi ini untuk tulis multi-tabel yang butuh
+    atomicity — sejak G7 ronde 7 TIDAK ADA jalur tulis app yang
+    memakainya: submit_report / verify_report / adjudicate_report
+    memakai turso_execute berurutan + aksi kompensasi + gagal-jujur
+    (atomicity sejati butuh trigger DB — lihat catatan G7 di
+    submit_report; pola CTE single-statement TIDAK BISA di SQLite:
+    DML di dalam WITH ditolak parser SQLite 3.45.1 lokal maupun
+    server Turso, SQL_PARSE_ERROR at (1, 20)).
 
     Bentuk wire + error SUDAH diverifikasi ke Turso live (baca-saja,
     2026-11-09): request {"type": "batch", "batch": {"steps": [...]}},
     respons result {"step_results": [...], "step_errors": [...]}.
-    Yang BELUM bisa dibuktikan tanpa tulis live adalah rollback-nya
-    atas tulis yang gagal di tengah batch — verifikasi live: submit
-    pertama berkonsen pasca-deploy WAJIB dicek di DB (baris reports +
-    baris consent_log sama-sama ada); kegagalan consent_log yang
-    meninggalkan yatim = batch TIDAK atomik (laporkan, jangan diam).
+    Fungsi ini melempar RuntimeError bila ada langkah yang gagal —
+    pemanggil TIDAK BOLEH menganggap langkah sebelumnya batal.
     """
     base = cfg["url"].rstrip("/")
     if base.startswith("libsql://"):
@@ -1162,22 +1171,53 @@ def adjudicate_report(cfg: dict, report_id: int, putusan: str,
         # ini tidak boleh dicatat sama sekali (GG-13).
         if not _reports_has_r8_cols(cfg):
             return False
+        # Ronde 7, G7 (kelas yang sama dengan submit/verify): batch
+        # TERBUKTI tidak atomik, jadi UPDATE + INSERT berjalan
+        # berurutan — bila jejak gagal tertulis, efek korpus
+        # DIBATALKAN kembali (corpus_excluded=0) supaya putusan tanpa
+        # jejak tidak berlaku diam-diam. Sengketa tetap terbuka
+        # (disputed_count menghitungnya — tidak ada jejak
+        # 'adjudikasi'), jadi putusan bisa diulang; baris tetap di
+        # korpus sampai putusan TERCATAT. Bila pembatalan itu pun
+        # gagal, baris keluar dari korpus tanpa jejak — itu gagal-ke-
+        # tertutup untuk korpus (aman) dengan sengketa tetap terbuka
+        # (terlihat, bisa diulang) — dicatat di sini, bukan ditelan
+        # tanpa jejak.
         try:
-            res = turso_batch(cfg, [
-                ("UPDATE reports SET corpus_excluded = 1 WHERE id = ?",
-                 [int(report_id)]),
-                ("INSERT INTO label_log (report_id, aksi, label, actor,"
-                 " putusan) VALUES (?, ?, ?, ?, ?) RETURNING id"
-                 if _label_log_has_putusan(cfg) else
-                 "INSERT INTO label_log (report_id, aksi, label, actor)"
-                 " VALUES (?, ?, ?, ?) RETURNING id",
-                 [int(report_id), "adjudikasi", putusan, actor, putusan]
-                 if _label_log_has_putusan(cfg) else
-                 [int(report_id), "adjudikasi", putusan, actor]),
-            ])
+            upd = turso_execute(
+                cfg,
+                "UPDATE reports SET corpus_excluded = 1 WHERE id = ? "
+                "RETURNING id",
+                [int(report_id)])
         except Exception:
             return False
-        return bool(res and len(res) > 1 and res[1])
+        if not upd:
+            return False
+        if _label_log_has_putusan(cfg):
+            _sql = ("INSERT INTO label_log (report_id, aksi, label, "
+                    "actor, putusan) VALUES (?, ?, ?, ?, ?) "
+                    "RETURNING id")
+            _args = [int(report_id), "adjudikasi", putusan, actor,
+                     putusan]
+        else:
+            _sql = ("INSERT INTO label_log (report_id, aksi, label, "
+                    "actor) VALUES (?, ?, ?, ?) RETURNING id")
+            _args = [int(report_id), "adjudikasi", putusan, actor]
+        try:
+            logged = turso_execute(cfg, _sql, _args)
+        except Exception:
+            logged = None
+        if not logged:
+            try:
+                turso_execute(
+                    cfg,
+                    "UPDATE reports SET corpus_excluded = 0 "
+                    "WHERE id = ?",
+                    [int(report_id)])
+            except Exception:
+                pass
+            return False
+        return True
     logged = _log_label_checked(cfg, report_id, "adjudikasi", putusan,
                                 actor=actor, putusan=putusan)
     return logged is not None
@@ -1232,20 +1272,28 @@ def submit_report(cfg: dict, *, channel: str, raw_text: str,
     Teks yang ditulis HANYA hasil scrub; created_at diisi basis data
     (UTC) dan menjadi tanggal submit resmi pada log pencatatan.
 
-    Ronde 8, M4: bila consent, INSERT reports + INSERT consent_log
-    berjalan dalam SATU batch pipeline (turso_batch) — satu transaksi
-    menurut dokumentasi Hrana: bila consent_log gagal, SELURUH simpan
-    dibatalkan dan exception merambat (warga melihat "gagal tersimpan"
-    dan TIDAK ADA baris yatim consent=1 tanpa bukti). Langkah kedua
-    memakai last_insert_rowid() — id hasil langkah pertama pada
-    koneksi yang sama — karena pipeline tidak punya variabel
-    antar-langkah. CATATAN: semantik rollback-on-failure batch adalah
-    asumsi dari dokumentasi Hrana (bentuk wire + error SUDAH
-    diverifikasi ke Turso live read-only, tetapi rollback belum
-    terbukti live) — smoke test WAJIB pada submit consent pertama
-    pasca-deploy: reports + consent_log harus sama-sama tertulis.
-    Sebagai pertahanan kedua, view corpus_export (migrasi 0002)
-    mensyaratkan ADA baris consent_log.
+    Ronde 7, G7 (pengganti M4 ronde 8 — batch TERBUKTI tidak atomik,
+    lihat turso_batch): bila consent, INSERT reports lalu INSERT
+    consent_log sebagai DUA turso_execute berurutan dengan id eksplisit
+    dari RETURNING langkah pertama (tanpa last_insert_rowid() lagi).
+    Bila consent_log gagal, baris reports DIHAPUS kembali (kompensasi)
+    dan RuntimeError merambat — warga melihat "gagal tersimpan" dan
+    TIDAK ADA baris yatim consent=1 tanpa bukti. Ini BUKAN atomicity
+    sejati: crash tepat di antara kedua tulis (atau gagalnya hapus
+    kompensasi) masih bisa meninggalkan yatim — tetapi (a) kegagalan
+    itu DIBAWA dalam pesan error, bukan ditelan; (b) sebagai pertahanan
+    kedua, view corpus_export (migrasi 0002) mensyaratkan ADA baris
+    consent_log, jadi yatim tidak pernah masuk korpus. Atomicity
+    sejati butuh trigger AFTER INSERT di DB (satu statement INSERT
+    reports memicu tulis consent_log dalam transaksi yang sama) —
+    pola single-statement CTE (WITH + INSERT-di-dalam-WITH) TIDAK
+    BISA:
+    DML di dalam WITH ditolak parser SQLite 3.45.1 lokal maupun
+    server Turso (SQL_PARSE_ERROR at (1, 20), terbukti live 9 Nov
+    2026). Trigger adalah keputusan skema + deploy terkoordinasi
+    (migrasi dulu = tulis ganda dengan kode lama; kode dulu + reboot,
+    baru migrasi + reboot lagi) — DITAHAN untuk keputusan Septian /
+    koordinator, bukan ditebak di sini.
     """
     clean_text, _findings = scrub(raw_text)
     sender_hash = hash_sender(sender_raw, cfg.get("salt")) \
@@ -1283,16 +1331,35 @@ def submit_report(cfg: dict, *, channel: str, raw_text: str,
                 if consent_data_use else None,
                 sender_hash, text_hash_of(clean_text), enrichment]
     if consent_data_use:
-        res = turso_batch(cfg, [(
+        rows = turso_execute(
+            cfg,
             "INSERT INTO reports (" + cols + ") "
             "VALUES (" + vals + ") RETURNING id, created_at",
-            args,
-        ), (
-            "INSERT INTO consent_log (report_id, consent_version, "
-            "consent_text_hash) VALUES (last_insert_rowid(), ?, ?)",
-            [CONSENT_VERSION, consent_text_hash()],
-        )])
-        row = res[0][0]
+            args)
+        row = rows[0]
+        try:
+            turso_execute(
+                cfg,
+                "INSERT INTO consent_log (report_id, consent_version, "
+                "consent_text_hash) VALUES (?, ?, ?)",
+                [row["id"], CONSENT_VERSION, consent_text_hash()])
+        except Exception:
+            # Kompensasi (Ronde 7, G7): hapus baris yatim supaya
+            # tidak ada laporan yang mengklaim consent tanpa bukti
+            # persetujuan. Bila penghapusan itu pun gagal,
+            # kegagalannya DIBAWA dalam pesan error — tidak ditelan
+            # diam-diam (kelas yang sama dengan S1 ronde 8).
+            _orphan = ""
+            try:
+                turso_execute(
+                    cfg, "DELETE FROM reports WHERE id = ?",
+                    [row["id"]])
+            except Exception as exc:
+                _orphan = (
+                    "; PERINGATAN: baris yatim id="
+                    f"{row['id']} gagal dihapus: {exc}")
+            raise RuntimeError(
+                "gagal menyimpan bukti persetujuan" + _orphan)
     else:
         rows = turso_execute(
             cfg,
@@ -2173,28 +2240,33 @@ def verify_report(cfg: dict, report_id: int, label: str, category: str,
     — dan kolom itu tidak pernah ditulis ulang sesudah verifikasi
     pertama. Kategori/galeri masih boleh berubah (bukan label).
 
-    Gap G5 ronde 8 (warisan G7 ronde 7): UPDATE reports + INSERT
-    label_log kini berjalan dalam SATU batch pipeline (turso_batch,
-    pola yang sama dengan fix M4 ronde 8) — satu transaksi menurut
-    dokumentasi Hrana. INSERT log memakai guard WHERE EXISTS atas
+    Gap G5 ronde 8 (warisan G7 ronde 7) — DIPERBARUI ronde 7, G7:
+    batch pipeline TERBUKTI tidak atomik (lihat turso_batch), jadi
+    UPDATE reports + INSERT label_log kini DUA turso_execute
+    berurutan: UPDATE dulu, dan INSERT log HANYA bila UPDATE mengenai
+    baris (dengan urutan ini jejak hantu tidak mungkin lagi — dulu
+    batch menulis jejak walau UPDATE tak mengenai, sehingga perlu
+    DELETE kompensasi; kompensasi itu sudah dihapus). Bila tulis log
+    gagal atau guard WHERE EXISTS-nya tak lolos, baris DIKEMBALIKAN
+    ke keadaan pra-verifikasi (status pending, verified_at NULL,
+    galeri 0, label = label pra-verifikasi) lewat _batalkan() dan
+    fungsi melempar RuntimeError — pemanggil WAJIB menampilkan
+    kegagalan, sukses TIDAK BOLEH dilaporkan tanpa jejak audit (kelas
+    yang sama dengan S1 ronde 8 pada adjudikasi). Ini BUKAN atomicity
+    sejati: crash tepat di antara kedua tulis (atau gagalnya
+    pemulihan) masih bisa meninggalkan baris terverifikasi tanpa
+    jejak — tetapi kegagalan itu DIBAWA dalam pesan error, bukan
+    ditelan, dan pembekuan label tetap dipertahankan fallback kolom
+    reports.label (laporan R7: korpus tidak rusak, yang hilang hanya
+    jejak audit). Atomicity sejati butuh trigger AFTER UPDATE di DB
+    — pola single-statement CTE TIDAK BISA di SQLite (lihat
+    submit_report); trigger DITAHAN untuk keputusan Septian /
+    koordinator. INSERT log tetap memakai guard WHERE EXISTS atas
     baris yang BARU terverifikasi, jadi bila UPDATE tidak mengenai
     baris apa pun (laporan sudah tidak pending — mis. klik ganda /
-    sudah diproses peninjau lain), TIDAK ADA jejak yang tertulis.
-    Gagal-jujur: bila UPDATE tidak mengenai baris, atau jejak tidak
-    tertulis, fungsi ini melempar RuntimeError dan pemanggil WAJIB
-    menampilkan kegagalan — sukses TIDAK BOLEH dilaporkan tanpa jejak
-    audit (kelas yang sama dengan S1 ronde 8 pada adjudikasi).
-    Pengecualian satu celah: pada jalur label-beku, guard WHERE
-    EXISTS bisa lolos untuk baris yang memang sudah terverifikasi —
-    jejak hantu itu dihapus kembali (DELETE kompensasi) sebelum
-    gagal-jujur, jadi tidak ada jejak atas verifikasi yang tidak
-    terjadi.
-    CATATAN: semantik rollback-on-failure batch adalah asumsi dari
-    dokumentasi Hrana, sama seperti M4 — bentuk wire + error SUDAH
-    diverifikasi ke Turso live read-only, rollback belum terbukti
-    live; guard WHERE EXISTS menutup celah penulisan-jejak-palsu
-    walau rollback itu ternyata tidak terjadi."""
+    sudah diproses peninjau lain), TIDAK ADA jejak yang tertulis."""
     first = frozen_label(cfg, report_id)
+    pre_label = first
     if first is None:
         # Pengaman kedua: label yang masih tersimpan di barisnya
         # sendiri (laporan yang dikembalikan pasca-v6.1.4 membawa
@@ -2204,90 +2276,90 @@ def verify_report(cfg: dict, report_id: int, label: str, category: str,
                 cfg, "SELECT label FROM reports WHERE id = ?",
                 [int(report_id)])
             first = rows[0]["label"] if rows else None
+            pre_label = first
         except Exception:
             first = None
+            pre_label = None
+            # Label pra-verifikasi tak terbaca: pemulihan di bawah
+            # memakai NULL — barisnya menempuh jalur verifikasi
+            # pertama (frozen_label tidak menemukan apa pun), jadi
+            # NULL adalah tebakan terbaik, bukan nilai yang ditelan
+            # diam-diam tanpa jejak (kegagalan tulis log tetap
+            # melempar RuntimeError).
+
+    def _batalkan() -> str:
+        """Kembalikan baris ke keadaan pra-verifikasi (kompensasi
+        Ronde 7, G7). Kembalikan '' bila berhasil, atau
+        '; PERINGATAN: ...' bila pemulihan itu pun gagal — kegagalan
+        pemulihan DIBAWA dalam pesan error, bukan ditelan."""
+        try:
+            turso_execute(
+                cfg,
+                "UPDATE reports SET status = 'pending', "
+                "verified_at = NULL, gallery_visible = 0, label = ? "
+                "WHERE id = ?",
+                [pre_label, int(report_id)])
+            return ""
+        except Exception as exc:
+            return ("; PERINGATAN: pemulihan baris id="
+                    f"{report_id} gagal: {exc}")
+
+    def _tulis_jejak(aksi: str, nilai_log: str,
+                     label_tersimpan: str) -> None:
+        """INSERT label_log dengan guard WHERE EXISTS; gagal (lempar
+        atau tanpa baris) -> batalkan + RuntimeError. Satu-satunya
+        tempat jejak verifikasi ditulis — selalu sesudah UPDATE
+        mengenai baris. nilai_log = label yang dicatat (pada jalur
+        label-beku: label BARU yang dicoba, bukan label beku);
+        label_tersimpan = label yang UPDATE tulis ke reports.label
+        (guard EXISTS memeriksa yang ini)."""
+        try:
+            rows_log = turso_execute(
+                cfg,
+                "INSERT INTO label_log (report_id, aksi, label, actor) "
+                "SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM reports "
+                "WHERE id = ? AND status = 'verified' AND label = ?) "
+                "RETURNING id",
+                [int(report_id), aksi, nilai_log, "verifikator",
+                 int(report_id), label_tersimpan])
+        except Exception:
+            raise RuntimeError(
+                "verifikasi gagal: jejak audit tidak tertulis"
+                + _batalkan())
+        if not rows_log:
+            raise RuntimeError(
+                "verifikasi gagal: jejak audit tidak tertulis"
+                + _batalkan())
+
     if first is not None:
         # Tulis kembali label beku ke kolomnya juga: baris warisan yang
         # dikembalikan dengan perilaku lama (label = NULL) harus
         # mendapatkan kembali label pertamanya — bila tidak, view
         # corpus_export (label IS NOT NULL) akan kehilangan baris itu.
-        res = turso_batch(cfg, [(
+        rows_upd = turso_execute(
+            cfg,
             "UPDATE reports SET status = 'verified', label = ?, "
             "category_modus = ?, gallery_visible = ?, "
             "verified_at = datetime('now') WHERE id = ? "
             "AND status = 'pending' RETURNING id",
             [first, category, 1 if gallery_visible else 0,
-             int(report_id)]), (
-            "INSERT INTO label_log (report_id, aksi, label, actor) "
-            "SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM reports "
-            "WHERE id = ? AND status = 'verified' AND label = ?) "
-            "RETURNING id",
-            [int(report_id), "revisi_pasca_paparan", label,
-             "verifikator", int(report_id), first]),
-        ])
-        if not res[0]:
-            # UPDATE tidak mengenai baris (sudah tidak pending) —
-            # tetapi guard WHERE EXISTS di atas bisa saja tetap lolos
-            # pada jalur label-beku (barisnya MEMANG sudah verified
-            # dari verifikasi pertama), sehingga jejak 'revisi'
-            # sempat tertulis. Hapus jejak hantu itu (kompensasi)
-            # sebelum gagal-jujur, supaya tidak ada jejak atas
-            # verifikasi yang tidak terjadi. Bila penghapusan itu
-            # pun gagal, kegagalannya DIBAWA dalam pesan error —
-            # tidak ditelan diam-diam.
-            _phantom = ""
-            if res[1]:
-                try:
-                    turso_execute(
-                        cfg, "DELETE FROM label_log WHERE id = ?",
-                        [res[1][0]["id"]])
-                except Exception as exc:
-                    _phantom = (
-                        "; PERINGATAN: jejak hantu id="
-                        f"{res[1][0]['id']} gagal dihapus: {exc}")
+             int(report_id)])
+        if not rows_upd:
             raise RuntimeError(
-                "verifikasi gagal: laporan sudah tidak pending"
-                + _phantom)
-        if not res[1]:
-            raise RuntimeError(
-                "verifikasi gagal: jejak audit tidak tertulis")
+                "verifikasi gagal: laporan sudah tidak pending")
+        _tulis_jejak("revisi_pasca_paparan", label, first)
         return first
-    res = turso_batch(cfg, [(
+    rows_upd = turso_execute(
+        cfg,
         "UPDATE reports SET status = 'verified', label = ?, "
         "category_modus = ?, gallery_visible = ?, "
         "verified_at = datetime('now') WHERE id = ? AND status = 'pending' "
         "RETURNING id",
-        [label, category, 1 if gallery_visible else 0, int(report_id)]),
-        (
-        "INSERT INTO label_log (report_id, aksi, label, actor) "
-        "SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM reports "
-        "WHERE id = ? AND status = 'verified' AND label = ?) "
-        "RETURNING id",
-        [int(report_id), "verifikasi", label, "verifikator",
-         int(report_id), label]),
-    ])
-    if not res[0]:
-        # Jalur verifikasi pertama: guard WHERE EXISTS di atas hanya
-        # bisa lolos bila UPDATE baru saja jalan (sebelumnya status
-        # masih 'pending'), jadi jejak hantu tidak mungkin di sini —
-        # tetapi pertahankan simetri dengan jalur label-beku: bila
-        # entah bagaimana jejak tertulis tanpa UPDATE, hapus (dan
-        # bila penghapusan gagal, bawa kegagalannya di pesan error).
-        _phantom = ""
-        if res[1]:
-            try:
-                turso_execute(
-                    cfg, "DELETE FROM label_log WHERE id = ?",
-                    [res[1][0]["id"]])
-            except Exception as exc:
-                _phantom = (
-                    "; PERINGATAN: jejak hantu id="
-                    f"{res[1][0]['id']} gagal dihapus: {exc}")
+        [label, category, 1 if gallery_visible else 0, int(report_id)])
+    if not rows_upd:
         raise RuntimeError(
-            "verifikasi gagal: laporan sudah tidak pending" + _phantom)
-    if not res[1]:
-        raise RuntimeError(
-            "verifikasi gagal: jejak audit tidak tertulis")
+            "verifikasi gagal: laporan sudah tidak pending")
+    _tulis_jejak("verifikasi", label, label)
     return label
 
 

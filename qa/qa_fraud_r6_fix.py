@@ -2,7 +2,9 @@
 — M1/M2/S5 (R6) + M1–M4/S1–S10/N1–N3 (R7) + M1–M9/S1–S7/N1–N5 (R8)
 + susulan v6.1.6 (9 Nov 2026, tanpa naik versi): normalisasi kode
 lacak + gap G4 (draf publik vs kode) + G5 (verify_report atomik) +
-G6 (bukti gerbang) + G7 (sensus Turnstile).
+G6 (bukti gerbang) + G7 (sensus Turnstile) + gap ronde 7 G5 (batas
+banjir dieksekusi) + G7 (batch TERBUKTI tidak atomik -> jalur tulis
+berurutan + kompensasi; pola CTE DML ditolak SQLite).
 
 Mensimulasikan skema Turso live (reports + label_log + view
 corpus_export, persis definisi sqlite_master live 2026-11-08) di
@@ -62,6 +64,8 @@ CFG = {}
 
 
 def fake_turso(cfg, sql, args=None):
+    if FAIL_LOG["on"] and "INSERT INTO label_log" in sql:
+        raise RuntimeError("simulasi: label_log gagal tulis")
     cur = con.execute(sql, args or [])
     if cur.description is None:
         con.commit()
@@ -75,10 +79,16 @@ FAIL_LOG = {"on": False}
 
 
 def fake_batch_main(cfg, statements):
-    """Simulasi turso_batch atas `con` (seksi awal guard): satu
-    transaksi SQLite; satu langkah gagal -> SEMUA dibatalkan. Dipakai
-    verify_report sejak gap G5 ronde 8 — tanpa stub ini seksi awal
-    akan memanggil turso_batch asli (HTTP ke Turso)."""
+    """Simulasi turso_batch atas `con` (seksi awal guard).
+
+    PERHATIAN (Ronde 7, G7): stub ini mensimulasikan atomicity
+    SQLite lokal (satu langkah gagal -> SEMUA dibatalkan) — semantik
+    itu TIDAK BERLAKU untuk turso_batch live (TERBUKTI tidak atomik:
+    tiap step commit sendiri). Stub dipertahankan hanya sebagai
+    simulasi lokal; TIDAK ADA lagi jalur tulis app yang memanggil
+    turso_batch, jadi stub ini tidak lagi menentukan perilaku
+    submit/verify — yang menentukan adalah turso_execute berurutan +
+    kompensasi (diuji lewat fake_turso / fake8)."""
     try:
         out = []
         for sql, args in statements:
@@ -168,7 +178,8 @@ check("R8-G5 verify atas laporan tak-pending -> RuntimeError",
       _g5_raise is True, str(_g5_raise))
 check("R8-G5 verify gagal tidak menulis jejak palsu",
       _log_after == _log_before, f"{_log_before} -> {_log_after}")
-# Kegagalan tulis log di tengah batch -> exception + baris tetap pending.
+# Kegagalan tulis log di tengah verifikasi -> exception + baris
+# kembali pending (kompensasi Ronde 7, G7).
 FAIL_LOG["on"] = True
 try:
     sk.verify_report(CFG, 3, "SMISHING", "undian", False)
@@ -176,11 +187,13 @@ try:
 except RuntimeError:
     _g5_logfail = True
 FAIL_LOG["on"] = False
-_row3 = fake_turso(CFG, "SELECT status FROM reports WHERE id = 3")[0]
+_row3 = fake_turso(CFG, "SELECT status, label FROM reports WHERE id = 3")[0]
 check("R8-G5 gagal tulis log -> verify raise (bukan sukses)",
       _g5_logfail is True, str(_g5_logfail))
-check("R8-G5 gagal tulis log -> baris tetap pending (batch batal)",
+check("R8-G5 gagal tulis log -> baris tetap pending (kompensasi)",
       _row3["status"] == "pending", str(_row3))
+check("R7-G7 gagal tulis log -> label kembali NULL (bukan label baru)",
+      _row3["label"] is None, str(_row3))
 
 # --- M2 legacy: baris yang dikembalikan dengan perilaku lama
 # (label NULL, tapi label_log punya 'verifikasi' pertama = SAH) ---
@@ -552,8 +565,10 @@ FAIL_CONSENT = {"on": False}
 
 def fake_batch(cfg, statements):
     """Simulasi turso_batch: satu transaksi SQLite; satu langkah gagal
-    -> SEMUA dibatalkan (semantik batch pipeline yang diasumsikan;
-    bentuk wire + error SUDAH diverifikasi ke Turso live read-only)."""
+    -> SEMUA dibatalkan. PERHATIAN (Ronde 7, G7): ini semantik
+    SQLite lokal, BUKAN semantik turso_batch live (yang TERBUKTI
+    tidak atomik). Stub dipertahankan sebagai simulasi lokal saja;
+    tidak ada lagi jalur tulis app yang memanggil turso_batch."""
     try:
         out = []
         for sql, args in statements:
@@ -849,9 +864,14 @@ _st2, _res2 = _safe_call(
 _raised = _st2 == "error"
 FAIL_CONSENT["on"] = False
 _n_after = fake8(CFG, "SELECT COUNT(*) AS n FROM reports")[0]["n"]
-check("R8-M4/GG-13 consent_log gagal -> submit raise + tanpa yatim",
-      _raised and _n_after == _n_before + 1,
-      f"raised={_raised} before={_n_before} after={_n_after}")
+_orphan_left = fake8(
+    CFG, "SELECT * FROM reports WHERE text_scrubbed = ?",
+    ["pesan konsen gagal"])
+check("R8-M4/GG-13 consent_log gagal -> submit raise + baris yatim "
+      "dihapus (kompensasi R7-G7, tanpa yatim)",
+      _raised and _n_after == _n_before + 1 and not _orphan_left,
+      f"raised={_raised} before={_n_before} after={_n_after} "
+      f"orphan={_orphan_left}")
 
 # --- GG-16 (KELAS): fail-open / kegagalan diam-diam --------------------
 # Pola umum: tiap jalur kegagalan intake WAJIB gagal-ke-tertutup atau
@@ -990,6 +1010,65 @@ _can, _rsn = _gate(
     session_submits=0)
 check("R8-GG-16 10 laporan pengirim -> gate False", _can is False,
       str(_rsn))
+# --- R7-G5: batas banjir teks-sama + global + residu anonim ---------
+# Alur OCR lengkap SUDAH diuji live 9 Nov (#37: submit+verifikasi).
+# Sisa G5 yang bisa dibangun: kunci batas banjir dieksekusi.
+_banjir_h = sk.text_hash_of(sk.scrub("Pesan banjir sama")[0])
+for _i in range(2):
+    con8b.execute(
+        "INSERT INTO reports (channel, text_scrubbed, text_hash,"
+        " created_at) VALUES ('sms', 'pesan banjir sama', ?,"
+        " datetime('now'))", (_banjir_h,))
+con8b.commit()
+_can, _rsn = _gate(
+    CFG_SALT, db_ready=True, intake_open=True, queue_full=False,
+    sender_raw=None, raw_text="Pesan banjir sama", session_submits=0)
+check("R7-G5 teks sama 2x -> gate lolos", _can is True, str(_rsn))
+con8b.execute(
+    "INSERT INTO reports (channel, text_scrubbed, text_hash,"
+    " created_at) VALUES ('sms', 'pesan banjir sama', ?,"
+    " datetime('now'))", (_banjir_h,))
+con8b.commit()
+_can, _rsn = _gate(
+    CFG_SALT, db_ready=True, intake_open=True, queue_full=False,
+    sender_raw=None, raw_text="Pesan banjir sama", session_submits=0)
+check("R7-G5 teks sama 3x -> gate False (batas 3/teks/hari)",
+      _can is False, str(_rsn))
+# Residu jujur: banjir teks-BERVARIASI dari pengirim ANONIM tidak
+# tertahan batas per-pengirim (tanpa nomor = tanpa sender_hash) dan
+# tidak tertahan batas per-teks (teks berbeda = hash berbeda) —
+# penahannya hanya batas global 300/hari + Turnstile per-pengiriman
+# + batas sesi. Guard ini MENGUNCI residu itu (bukan menutupnya):
+# bila kontrol anonim diperketat nanti, cek ini WAJIB diubah.
+for _i in range(10):
+    con8b.execute(
+        "INSERT INTO reports (channel, text_scrubbed, text_hash,"
+        " created_at) VALUES ('sms', ?, ?, datetime('now'))",
+        (f"pesan anonim bervariasi {_i}",
+         sk.text_hash_of(f"pesan anonim bervariasi {_i}")))
+con8b.commit()
+_can, _rsn = _gate(
+    CFG_SALT, db_ready=True, intake_open=True, queue_full=False,
+    sender_raw=None, raw_text="pesan anonim bervariasi baru",
+    session_submits=0)
+check("R7-G5 banjir anonim teks-bervariasi TIDAK tertahan "
+      "per-pengirim/teks (residu terkunci)",
+      _can is True, str(_rsn))
+# Batas global: genapkan laporan hari ini ke 300 -> gate False.
+_n_today = sk.reports_today_count(CFG_SALT)
+for _i in range(max(0, 300 - _n_today)):
+    con8b.execute(
+        "INSERT INTO reports (channel, text_scrubbed, text_hash,"
+        " created_at) VALUES ('sms', ?, ?, datetime('now'))",
+        (f"pesan global {_i}",
+         sk.text_hash_of(f"pesan global {_i}")))
+con8b.commit()
+_can, _rsn = _gate(
+    CFG_SALT, db_ready=True, intake_open=True, queue_full=False,
+    sender_raw=None, raw_text="pesan unik gate-global",
+    session_submits=0)
+check("R7-G5 300 laporan/hari -> gate False (batas global)",
+      _can is False, str(_rsn))
 # Sensus handler except: tripwire — handler baru WAJIB didaftarkan.
 # Audit 2026-11-09 (33 handler): semua fail-closed/jujur/UI-only —
 # gate (3x False), schema-probe (2x ok=False), Turnstile (False),
@@ -1000,12 +1079,21 @@ check("R8-GG-16 10 laporan pengirim -> gate False", _can is False,
 # label-beku + verifikasi-pertama (2x DELETE kompensasi jejak hantu —
 # gagal hapus DIBAWA dalam RuntimeError, bukan ditelan) dan pemanggil
 # UI tombol Verifikasi (1x st.error + tanpa rerun, gagal-jujur).
+# Audit susulan 2026-11-09 (40 handler, +4, Ronde 7 G7 — batch
+# TERBUKTI tidak atomik, jalur tulis beralih ke berurutan +
+# kompensasi): submit_report consent (2x: tulis consent_log gagal ->
+# hapus yatim; hapus yatim gagal -> DIBAWA dalam RuntimeError) dan
+# adjudicate_report 'diragukan' (2x: tulis jejak gagal -> batalkan
+# corpus_excluded; pembatalan gagal -> False, sengketa tetap terbuka
+# = gagal-ke-tertutup untuk korpus). verify_report tetap 2 handler
+# (DELETE kompensasi jejak hantu dihapus — tidak mungkin lagi —
+# diganti _batalkan + _tulis_jejak).
 # Keterbatasan: sensus hanya hitungan — fail-open BARU di dalam
 # handler yang sudah ada tidak tertangkap; tiap handler baru WAJIB
 # didaftarkan di sini + alasan fail-closed-nya.
 _n_except = SRC.count("except Exception")
 check("R8-GG-16 sensus except-Exception (tripwire hitungan)",
-      _n_except == 36, f"count={_n_except} (daftarkan handler baru)")
+      _n_except == 40, f"count={_n_except} (daftarkan handler baru)")
 
 # --- S4 (KELAS): batas harian UTC vs WITA ------------------------------
 # Pola umum: "per hari" = hari WITA di SEMUA penghitung batas — diuji
@@ -1248,13 +1336,58 @@ check("R8 app version v6.1.6", 'APP_VERSION = "v6.1.6"' in APP_SRC)
 
 # --- Gap G5 ronde 8: verify_report atomik + gagal-jujur --------------
 # (cek struktural — SRC baru terdefinisi di titik ini)
+# DIPERBARUI ronde 7, G7: batch TERBUKTI tidak atomik, jadi cek R8
+# lama ("memakai turso_batch" + "DELETE kompensasi jejak hantu")
+# DIGANTI cek pola baru (berurutan + kompensasi). Jejak hantu tidak
+# mungkin lagi: jejak ditulis HANYA sesudah UPDATE mengenai baris.
 _vrf = SRC.split("def verify_report(cfg")[1].split("def reject_report")[0]
-check("R8-G5 verify_report memakai turso_batch (bukan dua execute)",
-      "turso_batch(cfg" in _vrf)
+check("R7-G7 verify_report TIDAK memakai turso_batch",
+      "turso_batch(cfg" not in _vrf)
+check("R7-G7 verify_report pulihkan baris bila jejak gagal (_batalkan)",
+      "_batalkan()" in _vrf
+      and "verified_at = NULL" in _vrf)
+check("R7-G7 jejak hantu tak mungkin: tanpa DELETE label_log di verify",
+      "DELETE FROM label_log" not in _vrf)
 check("R8-G5 pemanggil UI tangkap gagal verify (st.error)",
       "Verifikasi gagal tersimpan" in SRC)
-check("R8-G5 jejak hantu dihapus kompensasi bila UPDATE tak mengenai",
-      "DELETE FROM label_log WHERE id = ?" in _vrf)
+_sub = SRC.split("def submit_report(cfg")[1].split("def fetch_gallery")[0]
+check("R7-G7 submit_report TIDAK memakai turso_batch",
+      "turso_batch(cfg" not in _sub)
+check("R7-G7 submit_report hapus yatim bila consent_log gagal",
+      "DELETE FROM reports WHERE id = ?" in _sub)
+check("R7-G7 submit_report tanpa last_insert_rowid (id eksplisit)",
+      "VALUES (last_insert_rowid()" not in _sub)
+_adj = SRC.split("def adjudicate_report(cfg")[1].split(
+    "def fetch_second_review_sample")[0]
+check("R7-G7 adjudicate 'diragukan' TIDAK memakai turso_batch",
+      "turso_batch(cfg" not in _adj)
+check("R7-G7 adjudicate batalkan corpus_excluded bila jejak gagal",
+      "corpus_excluded = 0" in _adj)
+check("R7-G7 TIDAK ADA pemanggil turso_batch di jalur tulis app "
+      "(hanya definisinya)",
+      SRC.count("turso_batch(cfg") == 1,  # hanya `def turso_batch(cfg`
+      str(SRC.count("turso_batch(cfg")))
+_tb = SRC.split("def turso_batch(cfg")[1].split(
+    "def _reports_has_r8_cols")[0]
+check("R7-G7 docstring turso_batch nyatakan TIDAK atomik (terbukti)",
+      "BUKAN TRANSAKSI" in _tb
+      and "tiap step" in _tb and "commit sendiri" in _tb
+      and '("SELURUH batch dibatalkan") SALAH' in _tb
+      and "JANGAN pakai fungsi ini untuk tulis multi-tabel" in _tb)
+check("R7-G7 tidak ada pola CTE DML di siskamling.py (SQLite menolak)",
+      "AS (INSERT" not in SRC and "AS (UPDATE" not in SRC
+      and "AS (DELETE" not in SRC)
+try:
+    _cte_con = sqlite3.connect(":memory:")
+    _cte_con.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+    _cte_con.execute(
+        "WITH ins AS (INSERT INTO t (v) VALUES ('a') RETURNING id) "
+        "SELECT id FROM ins")
+    _cte_ditolak = False
+except Exception:  # noqa: BLE001 — bukti guard: pola CTE ditolak
+    _cte_ditolak = True
+check("R7-G7 DML-di-CTE DITOLAK SQLite lokal (pola CTE bukan solusi)",
+      _cte_ditolak is True)
 
 # --- Gap G6 ronde 8: bukti gerbang klaim ------------------------------
 import json as _json
@@ -1321,14 +1454,20 @@ check("R8-G7 verify_turnstile didefinisikan sekali di siskamling.py",
       SRC.count("def verify_turnstile") == 1)
 
 # --- Gap G4 ronde 8: draf publik vs kode v6.1.6 ------------------------
+# Artikel v2 pindah ke repo (commit 0892748, satu sumber kebenaran di
+# docs/) — guard membaca dari sana, bukan p2-assets lagi (salinan di
+# p2-assets sudah tidak ada; cek lama atas p2-assets gagal vakum
+# pasca-pindah — diperbaiki ronde 7, G7). Reddit v1 tetap di p2-assets.
+_art_path = REPO / "docs" / "artikel-medium-substack-v2.md"
+_art = _art_path.read_text(encoding="utf-8") if _art_path.exists() else ""
+check("R8-G4 Artikel v2 ada di docs/ repo (satu sumber kebenaran)",
+      _art_path.is_file())
+check("R8-G4 Artikel v2 tak lagi klaim daftar triase terurut skor ada",
+      "daftar triase terurut skor ada terpisah" not in _art)
+check("R8-G4 Artikel v2 sebut kode lacak acak (bukan nomor lacak)",
+      "kode lacak acak" in _art and "nomor lacak" not in _art)
 _p2 = REPO.parent / "p2-assets"
 if _p2.is_dir():
-    _art = (_p2 / "artikel-medium-substack-v2.md").read_text(
-        encoding="utf-8") if (_p2 / "artikel-medium-substack-v2.md").exists() else ""
-    check("R8-G4 Artikel v2 tak lagi klaim daftar triase terurut skor ada",
-          "daftar triase terurut skor ada terpisah" not in _art)
-    check("R8-G4 Artikel v2 sebut kode lacak acak (bukan nomor lacak)",
-          "kode lacak acak" in _art and "nomor lacak" not in _art)
     _red = (_p2 / "draf-reddit-v1.md").read_text(
         encoding="utf-8") if (_p2 / "draf-reddit-v1.md").exists() else ""
     check("R8-G4 Reddit v1 tanpa klaim nomor/antrean yang kedaluwarsa",
