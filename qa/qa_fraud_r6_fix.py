@@ -1,5 +1,6 @@
-"""QA eksekusi fix ronde 6 + ronde 7 + ronde 8 Fraud Triage (v6.1.6)
+"""QA eksekusi fix ronde 6 + ronde 7 + ronde 8 + ronde 9 Fraud Triage (v6.1.6)
 — M1/M2/S5 (R6) + M1–M4/S1–S10/N1–N3 (R7) + M1–M9/S1–S7/N1–N5 (R8)
++ M1/S1–S9/N1–N8/G1 (R9) + hapus klaim "8 minggu" dari privasi.
 + susulan v6.1.6 (9 Nov 2026, tanpa naik versi): normalisasi kode
 lacak + gap G4 (draf publik vs kode) + G5 (verify_report atomik) +
 G6 (bukti gerbang) + G7 (sensus Turnstile) + gap ronde 7 G5 (batas
@@ -1091,9 +1092,16 @@ check("R7-G5 300 laporan/hari -> gate False (batas global)",
 # Keterbatasan: sensus hanya hitungan — fail-open BARU di dalam
 # handler yang sudah ada tidak tertangkap; tiap handler baru WAJIB
 # didaftarkan di sini + alasan fail-closed-nya.
+# Audit R9 (+12 handler, 40 -> 52): reject_report (2x: UPDATE try +
+# revert try), delete_report (3x: SELECT + UPDATE + revert),
+# unverify_report (+2x neto: SELECT/UPDATE/revert gantikan 1x lama),
+# set_gallery_visible (3x: SELECT + UPDATE + revert),
+# _intake_open_state (1x unknown), verify_report koersi galeri
+# (1x baca consent gagal -> koersi 0). Semua fail-closed/jujur
+# (False + revert, tanpa jejak palsu).
 _n_except = SRC.count("except Exception")
 check("R8-GG-16 sensus except-Exception (tripwire hitungan)",
-      _n_except == 40, f"count={_n_except} (daftarkan handler baru)")
+      _n_except == 52, f"count={_n_except} (daftarkan handler baru)")
 
 # --- S4 (KELAS): batas harian UTC vs WITA ------------------------------
 # Pola umum: "per hari" = hari WITA di SEMUA penghitung batas — diuji
@@ -1145,7 +1153,7 @@ check("R8-S4 kueri batas pakai date(..., '+8 hours')",
 # Pola umum: lacak laporan WAJIB butuh rahasia yang tak bisa ditebak
 # (kode acak per laporan), bukan nomor urut — diuji atas sifatnya
 # (acak, unik, alfabet tak-ambigu, tebak acak gagal), bukan atas satu
-# nilai kode. Keterbatasan: kode 8 karakter/40 bit masih bisa
+# nilai kode. Keterbatasan: kode 8 karakter/39,63 bit masih bisa
 # ditebak brute-force bila tanpa batas laju — mitigasi: lacak adalah
 # baca-saja + kode tidak memberi akses ke isi laporan.
 sk.turso_execute = fake8
@@ -1474,6 +1482,497 @@ if _p2.is_dir():
           "nomor lacak" not in _red and "terurut skor" not in _red)
 else:
     print("SKIP R8-G4 draf publik (p2-assets tak ada di mesin ini)")
+
+# ==================== RONDE 9 (v6.1.6, tanpa naik versi) ====================
+# Guard KELAS baru GG-33/GG-35/GG-36/GG-38 + perkuat GG-7/GG-11/GG-16
+# (konsolidasi review-deepseek-round9-20261109.md §2/§7).
+# Aturan Septian 2026-11-09 00:53: tiap guard mengunci POLA UMUM kelas
+# kesalahannya. Cek yang memakai _safe_call / stub gagal GAGAL pra-fix
+# (red) dan LOLOS pasca-fix (green) — sesuai urutan QA-dulu.
+import math as _math
+
+con9 = _fresh_con8()
+FAIL9 = {"on": False}
+
+
+def fake9(cfg, sql, args=None):
+    if FAIL9["on"] and "INSERT INTO label_log" in sql:
+        raise RuntimeError("simulasi: label_log gagal tulis")
+    cur = con9.execute(sql, args or [])
+    if cur.description is None:
+        con9.commit()
+        return []
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+sk.turso_execute = fake9
+sk.turso_batch = fake_batch
+if hasattr(sk, "_R8_COLS_CACHE"):
+    sk._R8_COLS_CACHE.clear()
+
+# Seed R9: #31 verified consent=1, #32 verified consent=0,
+# #33 pending consent=0, #34 pending consent=1, #35 verified consent=1
+# (untuk GG-33/GG-36/F-G1), #36 verified consent=1 + sengketa (F-G1).
+for _rid, _cons, _stt, _lbl in (
+        (31, 1, "verified", "SMISHING"),
+        (32, 0, "verified", "SMISHING"),
+        (33, 0, "pending", None),
+        (34, 1, "pending", None),
+        (35, 1, "verified", "SAH"),
+        (36, 1, "verified", "SMISHING")):
+    con9.execute(
+        "INSERT INTO reports (id, channel, text_scrubbed, model_score,"
+        " model_band, consent_data_use, created_at, status, label,"
+        " verified_at) VALUES (?, 'sms', ?, 0.9, 'ESKALASI', ?,"
+        " '2026-11-08 01:00:00', ?, ?, '2026-11-08 02:00:00')",
+        (_rid, f"pesan {_rid}", _cons, _stt, _lbl))
+    if _cons:
+        con9.execute(
+            "INSERT INTO consent_log (report_id, consent_version,"
+            " consent_text_hash) VALUES (?, 'v1', 'h')", (_rid,))
+for _rid, _lbl in ((31, "SMISHING"), (32, "SMISHING"),
+                   (35, "SAH"), (36, "SMISHING")):
+    con9.execute(
+        "INSERT INTO label_log (report_id, aksi, label)"
+        " VALUES (?, 'verifikasi', ?)", (_rid, _lbl))
+con9.execute("INSERT INTO label_log (report_id, aksi, label)"
+             " VALUES (36, 'tinjauan_kedua', 'SAH')")
+con9.commit()
+
+# --- F-S1 / F-N1 (KELAS GG-2): entropi kode lacak dihitung ulang -------
+_ALPH = sk.TRACK_CODE_ALPHABET
+check("R9-S1 alfabet kode lacak = 31 karakter (bukan 32)",
+      len(_ALPH) == 31, f"len={len(_ALPH)}")
+check("R9-S1 entropi 8 karakter = 39,63 bit (bukan 40)",
+      abs(8 * _math.log2(len(_ALPH)) - 39.63) < 0.01,
+      str(8 * _math.log2(len(_ALPH))))
+check("R9-S1 klaim '40 bit' hilang dari siskamling.py",
+      "40 bit" not in SRC)
+_turn = (REPO / "docs" / "turnstile.md").read_text(encoding="utf-8")
+check("R9-S1 klaim '40 bit' hilang dari docs/turnstile.md",
+      "40 bit" not in _turn)
+check("R9-S1 angka benar 39,63 tertulis di siskamling.py + turnstile.md",
+      "39,63" in SRC and "39,63" in _turn)
+_mig2 = (MIG_DIR / "0002_r8_corpus_track_ocr.sql").read_text(
+    encoding="utf-8")
+check("R9-N1 migrasi bedakan backfill 32-bit dari kode baru 39,63-bit",
+      "32 bit" in _mig2 and "39,63" in _mig2)
+
+# --- GG-33 (KELAS BARU): jejak audit ditelan -----------------------------
+# Pola umum: SETIAP tulis berjejak audit WAJIB terverifikasi
+# (RETURNING id / rowcount); logger WAJIB mengembalikan kegagalan;
+# UI WAJIB menampilkan kegagalan itu. Diuji dieksekusi atas SEMUA
+# fungsi saudara (bukan hanya adjudikasi yang sudah diperbaiki R8-S1).
+_log9_before = fake9(CFG, "SELECT COUNT(*) AS n FROM label_log")[0]["n"]
+FAIL9["on"] = True
+_res9 = sk.second_review(CFG, 31, "SMISHING", actor="peninjau-2")
+FAIL9["on"] = False
+_log9_after = fake9(CFG, "SELECT COUNT(*) AS n FROM label_log")[0]["n"]
+check("R9-S3/GG-33 second_review gagal catat -> 'gagal-catat' (bukan "
+      "cocok/beda)", _res9 == "gagal-catat", str(_res9))
+check("R9-S3/GG-33 second_review gagal catat -> tanpa jejak baru",
+      _log9_after == _log9_before, f"{_log9_before} -> {_log9_after}")
+check("R9-S3/GG-33 second_review sukses tetap 'cocok'",
+      sk.second_review(CFG, 31, "SMISHING",
+                       actor="peninjau-2") == "cocok")
+check("R9-S3/GG-33 second_review sukses tetap 'beda'",
+      sk.second_review(CFG, 31, "SAH", actor="peninjau-2") == "beda")
+check("R9-S5/GG-33 reject atas verified -> False + tanpa jejak 'tolak'",
+      sk.reject_report(CFG, 31) is False
+      and fake9(CFG, "SELECT * FROM label_log WHERE report_id = 31 "
+                     "AND aksi = 'tolak'") == [])
+check("R9-S5/GG-33 reject atas pending -> True + jejak 'tolak'",
+      sk.reject_report(CFG, 33) is True
+      and len(fake9(CFG, "SELECT * FROM label_log WHERE report_id = 33 "
+                          "AND aksi = 'tolak'")) == 1)
+check("R9-S5/GG-33 unverify atas pending -> False + tanpa jejak",
+      sk.unverify_report(CFG, 34) is False
+      and fake9(CFG, "SELECT * FROM label_log WHERE report_id = 34 "
+                     "AND aksi = 'kembalikan'") == [])
+check("R9-S5/GG-33 unverify atas verified -> True + status pending",
+      sk.unverify_report(CFG, 35) is True
+      and fake9(CFG, "SELECT status FROM reports WHERE id = 35"
+                     )[0]["status"] == "pending")
+check("R9-S5/GG-33 delete atas id tak ada -> False + tanpa jejak",
+      sk.delete_report(CFG, 9999) is False
+      and fake9(CFG, "SELECT * FROM label_log WHERE report_id = 9999"
+                     ) == [])
+check("R9-S5/GG-33 delete atas baris ada -> True + status deleted",
+      sk.delete_report(CFG, 34) is True
+      and fake9(CFG, "SELECT status FROM reports WHERE id = 34"
+                     )[0]["status"] == "deleted")
+check("R9-N7/GG-33 set_gallery_visible consent=1 -> True + jejak galeri",
+      sk.set_gallery_visible(CFG, 31, True) is True
+      and len(fake9(CFG, "SELECT * FROM label_log WHERE report_id = 31 "
+                          "AND aksi = 'galeri'")) == 1)
+_gal_before = fake9(CFG, "SELECT gallery_visible FROM reports "
+                         "WHERE id = 31")[0]["gallery_visible"]
+FAIL9["on"] = True
+_gal_fail = sk.set_gallery_visible(CFG, 31, False)
+FAIL9["on"] = False
+_gal_after = fake9(CFG, "SELECT gallery_visible FROM reports "
+                        "WHERE id = 31")[0]["gallery_visible"]
+check("R9-N7/GG-33 galeri gagal catat -> False + nilai dikembalikan",
+      _gal_fail is False and _gal_after == _gal_before,
+      f"ret={_gal_fail} {_gal_before} -> {_gal_after}")
+# Sensus pemanggil _log_label TANPA checked: setelah fix R9 harus NOL
+# (semua tulis berjejak memakai _log_label_checked / _tulis_jejak).
+_unchecked = [ln for ln in SRC.splitlines()
+              if re.search(r"_log_label\(", ln)
+              and "def _log_label(" not in ln
+              and "_log_label_checked(" not in ln]
+check("R9/GG-33 sensus: tak ada lagi pemanggil _log_label tak-terverifikasi",
+      not _unchecked, str(_unchecked[:3]))
+_admin = SRC.split("def render_admin_tab")[1]
+check("R9-M1/GG-33 UI adjudikasi tampilkan kegagalan",
+      "Adjudikasi gagal" in _admin)
+check("R9-S3/GG-33 UI tinjauan kedua tangani 'gagal-catat'",
+      "gagal-catat" in _admin)
+check("R9-S5/GG-33 UI tolak/hapus/kembalikan tampilkan kegagalan",
+      "Penolakan gagal" in _admin
+      and "Penghapusan gagal" in _admin
+      and "Pengembalian gagal" in _admin)
+check("R9-N7/GG-33 UI galeri tampilkan sukses/gagal",
+      "Galeri gagal" in _admin)
+
+# --- GG-35 (KELAS BARU): header basi -------------------------------------
+# Pola umum: header modul WAJIB menjelaskan kompensasi + batasnya,
+# bukan "atomik"; klaim yang sama dipindai di SELURUH repo terhadap
+# docstring turso_batch ("BUKAN TRANSAKSI").
+check("R9-S8/GG-35 header tak lagi klaim 'Consent atomik'",
+      "Consent atomik" not in SRC)
+check("R9-S8/GG-35 header tak lagi klaim 'verify_report atomik'",
+      "verify_report atomik" not in SRC)
+check("R9-S8/GG-35 header tak lagi klaim 'SATU transaksi batch pipeline'",
+      "SATU transaksi batch pipeline" not in SRC)
+_hdr = "\n".join(SRC.splitlines()[:70])
+check("R9-S8/GG-35 header jelaskan kompensasi + bukan atomik",
+      "kompensasi" in _hdr and "bukan atomik" in _hdr.lower())
+_bad_atomik = []
+for _p in list(REPO.rglob("*.py")) + list(REPO.rglob("*.md")) \
+        + list(REPO.rglob("*.sql")):
+    if "qa" in _p.parts or "__pycache__" in _p.parts:
+        continue
+    for _ln in _p.read_text(encoding="utf-8").splitlines():
+        if "atomik" in _ln.lower() \
+                and "tidak atomik" not in _ln.lower() \
+                and "bukan atomik" not in _ln.lower():
+            _bad_atomik.append(f"{_p.name}: {_ln.strip()[:70]}")
+check("R9-S8/GG-35 repo: tiap 'atomik' terkualifikasi tidak/bukan",
+      not _bad_atomik, str(_bad_atomik[:3]))
+
+# --- GG-36 (KELAS BARU): consent galeri, tulis + baca --------------------
+# Pola umum: SETIAP jalur tampil/ekspor WAJIB menegakkan consent di
+# KEDUA sisi — tulis (tolak visible=1 bila consent=0) DAN baca
+# (filter consent di kueri galeri). Diuji dieksekusi di kedua sisi.
+check("R9-S9/GG-36 set_gallery_visible consent=0 -> False + tetap 0",
+      sk.set_gallery_visible(CFG, 32, True) is False
+      and fake9(CFG, "SELECT gallery_visible FROM reports WHERE id = 32"
+                     )[0]["gallery_visible"] == 0)
+# #33 sudah rejected oleh cek GG-33 di atas; pakai baris pending baru.
+con9.execute(
+    "INSERT INTO reports (id, channel, text_scrubbed, model_score,"
+    " model_band, consent_data_use, created_at, status)"
+    " VALUES (37, 'sms', 'pesan 37', 0.9, 'ESKALASI', 0,"
+    " '2026-11-08 03:00:00', 'pending')")
+con9.execute(
+    "INSERT INTO reports (id, channel, text_scrubbed, model_score,"
+    " model_band, consent_data_use, created_at, status)"
+    " VALUES (38, 'sms', 'pesan 38', 0.9, 'ESKALASI', 1,"
+    " '2026-11-08 03:00:00', 'pending')")
+con9.execute("INSERT INTO consent_log (report_id, consent_version,"
+             " consent_text_hash) VALUES (38, 'v1', 'h')")
+con9.commit()
+_eff37 = sk.verify_report(CFG, 37, "SMISHING", "undian", True)
+check("R9-S9/GG-36 verify consent=0 + galeri=True -> terverifikasi "
+      "tapi galeri 0",
+      _eff37 == "SMISHING"
+      and fake9(CFG, "SELECT gallery_visible FROM reports WHERE id = 37"
+                     )[0]["gallery_visible"] == 0)
+_eff38 = sk.verify_report(CFG, 38, "SMISHING", "undian", True)
+check("R9-S9/GG-36 verify consent=1 + galeri=True -> galeri 1",
+      _eff38 == "SMISHING"
+      and fake9(CFG, "SELECT gallery_visible FROM reports WHERE id = 38"
+                     )[0]["gallery_visible"] == 1)
+con9.execute("UPDATE reports SET gallery_visible = 1 WHERE id = 32")
+con9.commit()
+_gal_ids = [r["id"] for r in sk.fetch_gallery(CFG, 30)]
+check("R9-S9/GG-36 fetch_gallery: consent=0 tak tampil walau visible=1",
+      32 not in _gal_ids and 37 not in _gal_ids, str(_gal_ids))
+check("R9-S9/GG-36 fetch_gallery: consent=1 + visible tampil",
+      38 in _gal_ids, str(_gal_ids))
+_gal_sql = SRC.split("def fetch_gallery(cfg")[1].split("def ")[0]
+check("R9-S9/GG-36 kueri galeri filter consent_data_use = 1",
+      "consent_data_use = 1" in _gal_sql)
+
+# --- GG-38 (KELAS BARU): flag provenance basi ----------------------------
+# Pola umum: flag asal (via_ocr) WAJIB mengikuti isi TERKINI — bila
+# teks diubah manual sesudah OCR, flag gugur (atau simpan asal
+# per-pesan). Diuji atas helper murni + struktural jalur submit.
+_ocr_fn = getattr(sk, "_ocr_provenance_applies", None)
+check("R9-N4/GG-38 helper _ocr_provenance_applies ada",
+      _ocr_fn is not None)
+if _ocr_fn is not None:
+    check("R9-N4/GG-38 OCR sama persis -> provenance berlaku",
+          _ocr_fn(True, "teks ocr", "teks ocr") is True)
+    check("R9-N4/GG-38 OCR diubah manual -> provenance gugur",
+          _ocr_fn(True, "teks diubah", "teks ocr") is False)
+    check("R9-N4/GG-38 tanpa flag OCR -> provenance tidak berlaku",
+          _ocr_fn(False, "teks ocr", "teks ocr") is False)
+    check("R9-N4/GG-38 spasi tepi tak gugurkan provenance",
+          _ocr_fn(True, "  teks ocr  ", "teks ocr") is True)
+else:
+    for _nm in ("R9-N4/GG-38 OCR sama persis -> provenance berlaku",
+                "R9-N4/GG-38 OCR diubah manual -> provenance gugur",
+                "R9-N4/GG-38 tanpa flag OCR -> provenance tidak berlaku",
+                "R9-N4/GG-38 spasi tepi tak gugurkan provenance"):
+        check(_nm, False, "helper belum ada (pra-fix)")
+check("R9-N4/GG-38 jalur submit pakai helper + simpan sumber OCR",
+      "_ocr_provenance_applies(" in SRC
+      and "sk_text_ocr_source" in SRC)
+
+# --- GG-7 diperkuat (R9-S6): penjaga "jangan" + verba klik --------------
+# Pola umum: "jangan" hanya menekan bila mengikat verba permintaan
+# itu — kini matriks verba KLIK x penguat x target tautan.
+_PROT_CLICK_FAIL = []
+for _verb in ("klik", "tekan", "tap", "click", "press"):
+    for _intens in ("", "pernah "):
+        for _tgt in ("tautan ini", "link ini", "tautan berikut"):
+            _t = f"Jangan {_intens}{_verb} {_tgt}"
+            if evaluate_rules(_t)["strong"]["S2"]:
+                _PROT_CLICK_FAIL.append(_t)
+check("R9-S6/GG-7 'Jangan [klik/tekan/tap] tautan' tetap BUKAN S2",
+      not _PROT_CLICK_FAIL, str(_PROT_CLICK_FAIL[:3]))
+check("R9-S6/GG-7 'Jangan sampai Anda klik tautan ini' pelindung",
+      evaluate_rules(
+          "Jangan sampai Anda klik tautan ini")["strong"]["S2"]
+      is False)
+check("R9-S6/GG-7 kontrol 'Jangan lupa, klik tautan ini' tetap S2",
+      evaluate_rules(
+          "Jangan lupa, klik tautan ini")["strong"]["S2"] is True)
+check("R9-S6/GG-7 kontrol 'Klik tautan ini' tetap S2",
+      evaluate_rules("Klik tautan ini")["strong"]["S2"] is True)
+check("R9-S6/GG-7 'Jangan klik tautan ini, berikan OTP Anda' tetap S2",
+      evaluate_rules(
+          "Jangan klik tautan ini, berikan OTP Anda"
+          )["strong"]["S2"] is True)
+
+# --- GG-11 diperkuat (R9-S2): scrubber port/userinfo/IPv4+port -----------
+# Pola umum: URL berbentuk apa pun WAJIB kehilangan ekornya —
+# kemunculan ke-3 (R7 query-tanpa-path, R8 fragment/TLD, R9
+# port/userinfo). Matriks port x userinfo x skema, generatif.
+_bad11r9 = []
+for _text, _exp in (
+        ("cek https://klaim-dana.co.id:8443/v?token=abc",
+         "cek [tautan: klaim-dana.co.id]"),
+        ("cek https://user:pass@evil.com/x?token=1",
+         "cek [tautan: evil.com]"),
+        ("cek http://192.168.1.1:8080/admin?x=1",
+         "cek [tautan: 192.168.1.1]"),
+        ("cek https://user@evil.com:8443/x?token=1",
+         "cek [tautan: evil.com]"),
+        ("cek klaim-dana.co.id:8443/v?token=abc",
+         "cek [tautan: klaim-dana.co.id]"),
+        ("cek https://example.com:443/path.",
+         "cek [tautan: example.com]."),
+        ("cek http://10.0.0.1:8080/a?token=x#frag",
+         "cek [tautan: 10.0.0.1]"),
+        ("cek https://user:pass@evil.com:8443/a/b?x=1#y",
+         "cek [tautan: evil.com]")):
+    _got, _ = scrub(_text)
+    if _got != _exp:
+        _bad11r9.append((_text, _got))
+for _port in ("80", "443", "8443", "8080", "3000"):
+    for _ui in ("", "user@", "user:pass@"):
+        _text = f"cek https://{_ui}contoh.dev:{_port}/a?token=x"
+        _got, _ = scrub(_text)
+        if _got != "cek [tautan: contoh.dev]":
+            _bad11r9.append((_text, _got))
+for _text, _exp in (
+        ("email saya a@b.com ya", "email saya [EMAIL] ya"),
+        ("hub 0812-3456-7890 ya", "hub [NOMOR] ya"),
+        ("saldo Rp50.000.000 cair", "saldo Rp50.000.000 cair")):
+    _got, _ = scrub(_text)
+    if _got != _exp:
+        _bad11r9.append((_text, _got))
+check("R9-S2/GG-11 scrub port/userinfo/IPv4+port -> host saja",
+      not _bad11r9, str(_bad11r9[:3]))
+from rules import _extract_domains as _ex_dom9
+check("R9-S2/GG-11 _extract_domains buang port + userinfo",
+      _ex_dom9("klik https://user:pass@evil.com:8443/x?token=1")
+      == ["evil.com"],
+      str(_ex_dom9("klik https://user:pass@evil.com:8443/x?token=1")))
+
+# --- GG-16 diperkuat (R9): fail-open di UI/admin + hitungan + caption ---
+# F-M1: pemanggil UI adjudikasi WAJIB bercabang atas hasil.
+_adj_lines = [ln for ln in _admin.splitlines()
+              if "adjudicate_report(" in ln]
+check("R9-M1/GG-16 kedua tombol adjudikasi tangkap nilai balik",
+      len(_adj_lines) == 2
+      and all("=" in ln.split("adjudicate_report(")[0]
+              for ln in _adj_lines),
+      str(_adj_lines))
+check("R9-M1/GG-16 adjudikasi sukses tampilkan sukses (bukan rerun buta)",
+      "Adjudikasi tersimpan" in _admin)
+# F-S7: hitungan gagal dibedakan dari 0.
+_OLD_TURSO = sk.turso_execute
+
+
+def _fake_raise_count(cfg, sql, args=None):
+    if "COUNT(*)" in sql:
+        raise RuntimeError("simulasi: DB hitung gagal")
+    return fake9(cfg, sql, args)
+
+
+sk.turso_execute = _fake_raise_count
+check("R9-S7/GG-16 gold_count gagal hitung -> None (bukan 0)",
+      sk.gold_count(CFG) is None)
+check("R9-S7/GG-16 disputed_count gagal hitung -> None (bukan 0)",
+      sk.disputed_count(CFG) is None)
+sk.turso_execute = _OLD_TURSO
+check("R9-S7/GG-16 gold/disputed pulih sesudah DB pulih",
+      isinstance(sk.gold_count(CFG), int)
+      and isinstance(sk.disputed_count(CFG), int))
+_ana_seg = SRC.split("def _render_analytics")[1].split(
+    "def _report_meta")[0]
+check("R9-S7/GG-16 analitik tampilkan 'tidak tersedia' bila hitung gagal",
+      "tidak tersedia" in _ana_seg)
+check("R9-S7/GG-16 caption admin tangani gold None",
+      "tidak tersedia" in _admin)
+# F-S4: probe skema bedakan gagal-skema (boleh cache) dari gagal-transien.
+if hasattr(sk, "_R8_COLS_CACHE"):
+    sk._R8_COLS_CACHE.clear()
+_probe_n = {"n": 0}
+
+
+def _fake_probe_transient(cfg, sql, args=None):
+    if "track_code" in sql and _probe_n["n"] == 0:
+        _probe_n["n"] += 1
+        raise RuntimeError("turso error: connection reset by peer")
+    return fake9(cfg, sql, args)
+
+
+sk.turso_execute = _fake_probe_transient
+_first = sk._reports_has_r8_cols(CFG)
+_second = sk._reports_has_r8_cols(CFG)
+sk.turso_execute = fake9
+check("R9-S4 gagal-transien TIDAK di-cache (percobaan ke-2 pulih)",
+      _first is False and _second is True,
+      f"{_first} -> {_second}")
+if hasattr(sk, "_R8_COLS_CACHE"):
+    sk._R8_COLS_CACHE.clear()
+
+
+def _fake_probe_schema(cfg, sql, args=None):
+    if "track_code" in sql:
+        raise RuntimeError(
+            'turso error: {"error": "no such column: track_code"}')
+    return fake9(cfg, sql, args)
+
+
+sk.turso_execute = _fake_probe_schema
+_s1 = sk._reports_has_r8_cols(CFG)
+sk.turso_execute = fake9
+_s2 = sk._reports_has_r8_cols(CFG)
+sk.turso_execute = fake9
+check("R9-S4 gagal-skema TETAP di-cache False",
+      _s1 is False and _s2 is False, f"{_s1} -> {_s2}")
+if hasattr(sk, "_R8_COLS_CACHE"):
+    sk._R8_COLS_CACHE.clear()
+sk.turso_execute = fake9
+# F-N8: caption kill-switch tri-state (bukan fail-open).
+check("R9-N8/GG-16 caption intake admin tangani 'tidak dapat dipastikan'",
+      "tidak dapat dipastikan" in _admin)
+_st_intake = getattr(sk, "_intake_open_state", None)
+check("R9-N8/GG-16 helper _intake_open_state ada", _st_intake is not None)
+if _st_intake is not None:
+    def _fake_intake_raise(cfg, sql, args=None):
+        raise RuntimeError("simulasi: app_config tak terbaca")
+    sk.turso_execute = _fake_intake_raise
+    _u = _st_intake(CFG)
+    sk.turso_execute = fake9
+    check("R9-N8/GG-16 baca config gagal -> 'unknown'",
+          _u == "unknown", str(_u))
+
+    def _fake_intake_empty(cfg, sql, args=None):
+        return []
+
+    sk.turso_execute = _fake_intake_empty
+    _e = _st_intake(CFG)
+    sk.turso_execute = fake9
+    check("R9-N8/GG-16 baris tak ada -> 'open' (default lama)",
+          _e == "open", str(_e))
+# F-N5: pesan galat mentah tidak lagi ke publik.
+for _ln in SRC.splitlines():
+    if "Laporan gagal tersimpan" in _ln:
+        check("R9-N5/GG-16 pesan simpan gagal tanpa {exc} mentah",
+              "{exc}" not in _ln, _ln.strip())
+        break
+else:
+    check("R9-N5/GG-16 pesan simpan gagal ada", False)
+check("R9-N5/GG-16 'Status belum bisa dimuat: {exc}' hilang",
+      "Status belum bisa dimuat: {exc}" not in SRC)
+check("R9-N5/GG-16 pesan lacak generik tanpa detail internal",
+      "Status belum bisa dimuat saat ini" in SRC)
+_track_seg = SRC.split("def _render_track_expander")[1].split(
+    "def render_lapor_tab")[0]
+check("R9-N5/GG-16 'tidak ditemukan' tak tampil sesudah galat lacak",
+      "sk_track_error" in _track_seg)
+
+# --- Sisa nit R9 -----------------------------------------------------------
+check("R9-N2 wording lama dianotasi '(diganti v6.1.6: kode lacak acak)'",
+      "(diganti v6.1.6: kode lacak acak)" in SRC)
+check("R9-N3 komentar Turnstile 'SENGAJA belum dipasang' hilang",
+      "CAPTCHA (Turnstile) SENGAJA belum dipasang" not in SRC)
+check("R9-N6 catatan Analitik sebut kategori modus teratas",
+      "kategori modus teratas" in SRC)
+check("R9-G1/GG-13 'pertahankan' pasca-'diragukan': eksklusi PERMANEN",
+      sk.adjudicate_report(CFG, 36, "diragukan",
+                           actor="verifikator") is True
+      and fake9(CFG, "SELECT corpus_excluded FROM reports WHERE id = 36"
+                     )[0]["corpus_excluded"] == 1)
+# Baseline: sengketa #31 dari cek GG-33 di atas masih terbuka (belum
+# diadjudikasi) — jadi hitung RELATIF terhadap baseline, bukan 0/1
+# mutlak. Baseline diambil SEBELUM tinjauan baru dimasukkan.
+_base_disputed = sk.disputed_count(CFG)
+con9.execute("INSERT INTO label_log (report_id, aksi, label)"
+             " VALUES (36, 'tinjauan_kedua', 'SAH')")
+con9.commit()
+check("R9-G1 sengketa baru pasca-diragukan membuka antrean lagi",
+      sk.disputed_count(CFG) == _base_disputed + 1,
+      str(sk.disputed_count(CFG)))
+check("R9-G1 adjudikasi 'pertahankan' menutup sengketa",
+      sk.adjudicate_report(CFG, 36, "pertahankan",
+                           actor="verifikator") is True
+      and sk.disputed_count(CFG) == _base_disputed)
+check("R9-G1 corpus_excluded TETAP 1 sesudah 'pertahankan' (permanen)",
+      fake9(CFG, "SELECT corpus_excluded FROM reports WHERE id = 36"
+                     )[0]["corpus_excluded"] == 1)
+check("R9-G1 baris tetap di luar corpus_export sesudah 'pertahankan'",
+      fake9(CFG, "SELECT * FROM corpus_export WHERE text_scrubbed = "
+                 "'pesan 36'") == [])
+_adj_doc = SRC.split("def adjudicate_report(cfg")[1].split(
+    "def fetch_second_review_sample")[0]
+check("R9-G1 docstring adjudikasi nyatakan eksklusi permanen",
+      "permanen" in _adj_doc)
+# --- Item tambahan (ACC Septian 09:30): hapus "8 minggu" dari privasi ---
+check("R9-TAMBAHAN klaim '8 minggu' hilang dari PRIVACY_TEXT_V1",
+      "8 minggu" not in sk.PRIVACY_TEXT_V1)
+check("R9-TAMBAHAN klaim Tokyo TETAP di PRIVACY_TEXT_V1",
+      "Tokyo" in sk.PRIVACY_TEXT_V1)
+check("R9-TAMBAHAN cadangan ditulis apa adanya (pengaturan akun)",
+      "cadangan otomatis mengikuti pengaturan akun"
+      in sk.PRIVACY_TEXT_V1)
+
+# --- Sensus handler except (tripwire hitungan) — diperbarui R9 -----------
+# Audit R9 (40 -> 52, +12 — rincian sama seperti di cek R8-GG-16 di
+# atas): reject (2x), delete (3x), unverify (+2x neto), galeri (3x),
+# _intake_open_state (1x), verify koersi galeri (1x). Cek ini GAGAL
+# bila handler except bertambah/berkurang tanpa didaftarkan.
+_n_except9 = SRC.count("except Exception")
+check("R9/GG-16 sensus except-Exception (tripwire hitungan)",
+      _n_except9 == 52, f"count={_n_except9} (daftarkan handler baru)")
 
 print()
 print("FAILURES:", fails if fails else "none — ALL PASS")

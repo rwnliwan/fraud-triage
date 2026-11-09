@@ -47,6 +47,9 @@ ALTER TABLE label_log ADD COLUMN putusan TEXT;
 -- praktis tidak mungkin pada jumlah baris saat ini (1 baris live),
 -- dan indeks UNIK di bawah akan menggagalkan migrasi secara jujur
 -- bila tabrakan benar-benar terjadi (bukan diam-diam).
+-- BEDAKAN GENERASI: backfill 32-bit ini BUKAN kode baru aplikasi —
+-- kode baru memakai alfabet 31 karakter x 8 = 39,63 bit (dikoreksi
+-- ronde 9, S1 dari angka lama).
 UPDATE reports SET track_code = substr(hex(randomblob(4)), 1, 8)
     WHERE track_code IS NULL;
 

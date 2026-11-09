@@ -45,8 +45,9 @@ dilindungi Turnstile.
 
 - **Tidak ada Turnstile.** Jalur ini hanya membaca status/label satu
   baris (tanpa isi pesan) dan dilindungi oleh kode lacak acak 8
-  karakter (40 bit, ronde 8, M9) — tebak acak praktis tidak mungkin,
-  berbeda dengan nomor urut yang dulu bisa dienumerasi. Menambah
+  karakter (39,63 bit — dikoreksi ronde 9, S1 dari angka lama;
+  alfabet 31 karakter, bukan 32 — ronde 8, M9) — tebak acak praktis
+  tidak mungkin, berbeda dengan nomor urut yang dulu bisa dienumerasi. Menambah
   Turnstile di sini akan membebani warga yang sekadar mengecek
   status laporannya sendiri tanpa menambah perlindungan yang berarti.
 

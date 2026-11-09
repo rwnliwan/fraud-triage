@@ -86,10 +86,12 @@ SUSPICIOUS_TLDS = {
 # yang seluruhnya huruf (>= 2 huruf) dihitung sebagai TLD, plus
 # literal IPv4 ber-skema; ekor `[/?#]...` ikut tercocok supaya
 # fragment tidak lolos dari deteksi (kelas yang sama dengan scrubber).
+# Ronde 9, S2: port (`:8443`) + userinfo (`user:pass@`) ikut tercocok
+# (cermin scrubber.py) supaya domain hasil ekstraksi tetap host-nya.
 _URL_RE = re.compile(
-    r"(?:https?://)(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:[/?#][^\s]*)?"
-    r"|(?:https?://)?(?:www\.)?"
-    r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}"
+    r"(?:https?://)(?:[^\s/@?#]+@)?(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:[/?#][^\s]*)?"
+    r"|(?:https?://)?(?:[^\s/@?#]+@)?(?:www\.)?"
+    r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?"
     r"(?:[/?#][^\s]*)?",
     re.IGNORECASE,
 )
@@ -171,7 +173,10 @@ def _extract_domains(text):
     for m in _URL_RE.finditer(text):
         raw = m.group(0)
         host = re.sub(r"^https?://", "", raw, flags=re.IGNORECASE)
-        host = re.split(r"[/?#]", host)[0].lower()
+        # Ronde 9, S2: buang userinfo dulu ("@" bisa mengandung ":"),
+        # baru port (":") — cermin _url_sub di scrubber.py.
+        host = host.rsplit("@", 1)[-1]
+        host = re.split(r"[/?#:]", host)[0].lower()
         if host.startswith("www."):
             host = host[4:]
         # Alamat email juga cocok dengan pola domain; itu wajar — domainnya
@@ -203,6 +208,20 @@ _GUARD_PROTECTIVE_RE = re.compile(
     r"[^.!?\n]{0,40}?\b(?:otp|pin|password|kata sandi|sandi|kode)\b",
     re.IGNORECASE,
 )
+# Ronde 9, S6 (GG-7, pengulangan): penjaga di atas hanya mencakup
+# verba meminta KREDENSIAL — verba KLIK luput, sehingga "Jangan klik
+# tautan ini" (pesan sah yang memperingatkan warga) terhitung S2.
+# Pola kedua ini cermin yang sama untuk verba klik + target tautan:
+# "jangan" hanya menekan bila ia MENGIKAT verba klik itu ("Jangan
+# lupa, klik tautan ini" TIDAK ditekan — "jangan"-nya mengikat "lupa").
+_GUARD_PROTECTIVE_CLICK_RE = re.compile(
+    r"\bjangan\b"
+    r"(?:\s+(?:pernah|sekali-kali|sampai|sekali\s+pun))?"
+    r"(?:\s+(?:anda|kamu|kau|kalian))?"
+    r"\s+(?:klik|tekan|tap|click|press)\b"
+    r"[^.!?\n]{0,40}?\b(?:tautan|link)\b",
+    re.IGNORECASE,
+)
 
 
 def _matches_s2(text):
@@ -218,6 +237,8 @@ def _matches_s2(text):
     """
     protective = [(m.start(), m.end())
                   for m in _GUARD_PROTECTIVE_RE.finditer(text)]
+    protective += [(m.start(), m.end())
+                   for m in _GUARD_PROTECTIVE_CLICK_RE.finditer(text)]
     for pat in _S2_PATTERNS:
         for m in pat.finditer(text):
             if any(a <= m.start() < b for a, b in protective):

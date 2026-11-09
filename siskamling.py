@@ -22,7 +22,7 @@ Baru di v6.0.0 (gelombang riset kompetitor): (1) kartu langkah darurat
 berbasis keadaan sesudah vonis — warga memilih keadaannya (belum klik /
 sudah klik / sudah beri OTP-data / uang terkirim) dan menerima langkah
 yang sesuai + tautan resmi cekrekening.id, aduannomor.id, IASC OJK.
-(2) Loop tertutup: nomor laporan = nomor lacak; expander "Lacak
+(2) Loop tertutup: nomor laporan = nomor lacak (diganti v6.1.6: kode lacak acak); expander "Lacak
 laporan saya" menampilkan status pemeriksaan tanpa data lain.
 (3) Intake tangkapan layar + OCR (pytesseract ind+eng; biner dari
 packages.txt di Streamlit Cloud) — teks bacaan diedit warga dulu,
@@ -44,9 +44,11 @@ tidak ada sengketa terbuka; tinjauan berbeda yang baru membuka lagi
 antrean; putusan tercatat terverifikasi + di kolom putusan sendiri.
 (3) Panel Analitik: distribusi band model hanya atas laporan
 TERVERIFIKASI (pending tidak lagi bocor lewat agregat); caption
-panel ditulis apa adanya. (4) Consent atomik: INSERT reports +
-consent_log dalam SATU transaksi batch pipeline; view korpus kini
-mensyaratkan bukti consent_log. (5) Token Turnstile diverifikasi
+panel ditulis apa adanya. (4) Consent BUKAN atomik: INSERT reports +
+consent_log sebagai DUA turso_execute berurutan + kompensasi
+hapus-yatim dan gagal-jujur (batch pipeline TERBUKTI tidak atomik —
+lihat turso_batch); view korpus kini mensyaratkan bukti consent_log.
+(5) Token Turnstile diverifikasi
 ulang TIAP pengiriman (tanpa cache sesi); widget di-reset tiap
 submit sukses. (6) Intake gagal-ke-tertutup: kill switch/batas/hash
 yang gagal dibaca TIDAK LAGI membuka simpan; gerbang simpan murni
@@ -61,8 +63,10 @@ Susulan v6.1.6 (9 Nov 2026, tanpa naik versi — gap ronde 8 G4–G7 +
 temuan verifikasi live): (a) lacak kode: input dinormalisasi (hubung/
 spasi dibuang) karena contoh UI memakai hubung sementara kode
 tersimpan tanpa hubung; resep menampilkan kode berhubung agar sama
-dengan contoh. (b) verify_report atomik (G5): UPDATE + jejak audit
-dalam satu batch pipeline + gagal-jujur bila jejak tak tertulis.
+dengan contoh. (b) verify_report dengan kompensasi (G5, bukan atomik):
+UPDATE + jejak audit sebagai dua turso_execute berurutan; bila jejak
+tak tertulis, baris dikembalikan + gagal-jujur. Atomicity sejati
+butuh trigger DB (migrasi 0003, DITAHAN untuk keputusan Septian).
 (c) Sensus Turnstile penuh (G7): docs/turnstile.md. (d) Bukti
 gerbang klaim (G6): journey.py merujuk file evaluasi + konstanta
 GERBANG yang tak berubah sejak commit pertama. (e) Draf publik
@@ -260,8 +264,8 @@ PRIVACY_TEXT_V1 = (
     "bebas, kode OTP, dan deret digit panjang sengaja tidak dihapus "
     "(lihat 'Batas pembersihan otomatis' di bawah) — jadi jangan "
     "menganggap teks tersimpan pasti bebas identitas. Salinan "
-    "cadangan berkala disimpan maksimal **8 minggu** untuk keamanan "
-    "data.\n\n"
+    "cadangan otomatis mengikuti pengaturan akun layanan basis data."
+    "\n\n"
     "**Berapa lama disimpan (retensi):** laporan disimpan selama "
     "layanan berjalan atau sampai dihapus atas permintaan / "
     "keputusan pengelola; saat ini **belum ada penghapusan otomatis "
@@ -491,7 +495,24 @@ def turso_batch(cfg: dict, statements: list) -> list:
 # adjudicate_report. Hasil probe di-cache per URL selama proses
 # berjalan; sesudah migrasi 0002 diterapkan, REBOOT app agar cache
 # ini tersegarkan (alasan reboot kedua, selain modul impor).
+# Ronde 9, S4: yang di-cache HANYA kegagalan SKEMA (kolom/tabel tak
+# ada — skema tidak berubah selama proses). Kegagalan TRANSIEN
+# (koneksi/kuota/timeout) TIDAK di-cache: probe diulang tiap
+# panggilan, supaya satu gagal sesaat tidak mematikan track_code
+# untuk semua submit sampai reboot.
 _R8_COLS_CACHE: dict = {}
+_SCHEMA_ERROR_RE = re.compile(r"no such (column|table)",
+                              re.IGNORECASE)
+
+
+def _probe_error_is_schema(exc: Exception) -> bool:
+    """True bila galat probe berarti skema lama (kolom/tabel tak ada).
+
+    Pesan galat Turso ("turso error: ...no such column...") maupun
+    sqlite3.OperationalError lokal membawa frasa yang sama; galat
+    koneksi/kuota tidak — jadi klasifikasi ini bekerja di kedua sisi.
+    """
+    return bool(_SCHEMA_ERROR_RE.search(str(exc)))
 
 
 def _reports_has_r8_cols(cfg: dict) -> bool:
@@ -504,11 +525,12 @@ def _reports_has_r8_cols(cfg: dict) -> bool:
             cfg,
             "SELECT track_code, via_ocr, corpus_excluded "
             "FROM reports LIMIT 0")
-        ok = True
-    except Exception:
-        ok = False
-    _R8_COLS_CACHE[key] = ok
-    return ok
+    except Exception as exc:
+        if _probe_error_is_schema(exc):
+            _R8_COLS_CACHE[key] = False
+        return False
+    _R8_COLS_CACHE[key] = True
+    return True
 
 
 def _label_log_has_putusan(cfg: dict) -> bool:
@@ -518,11 +540,12 @@ def _label_log_has_putusan(cfg: dict) -> bool:
         return _R8_COLS_CACHE[key]
     try:
         turso_execute(cfg, "SELECT putusan FROM label_log LIMIT 0")
-        ok = True
-    except Exception:
-        ok = False
-    _R8_COLS_CACHE[key] = ok
-    return ok
+    except Exception as exc:
+        if _probe_error_is_schema(exc):
+            _R8_COLS_CACHE[key] = False
+        return False
+    _R8_COLS_CACHE[key] = True
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -538,8 +561,10 @@ def _label_log_has_putusan(cfg: dict) -> bool:
 #     Jeda antar-kirim per sesi memperlambat klik beruntun.
 #   * text_hash: sidik teks ter-scrub ternormalisasi (huruf kecil,
 #     spasi dirapikan) untuk deteksi duplikat lintas variasi penulisan.
-# CAPTCHA (Turnstile) SENGAJA belum dipasang: eskalasi bila serangan
-# sungguhan muncul, agar formulir warga tetap mulus selama aman.
+# CAPTCHA (Turnstile) sudah terpasang, tetapi DORMAN secara default:
+# widget hanya aktif bila kunci terpasang DAN flag turnstile_on = '1'
+# (lihat turnstile_active) — eskalasi bila serangan sungguhan muncul,
+# agar formulir warga tetap mulus selama aman.
 # ---------------------------------------------------------------------------
 MAX_PER_SENDER_PER_DAY = 10
 MAX_REPORTS_PER_DAY = 300
@@ -586,8 +611,28 @@ def _set_config(cfg: dict, key: str, value: str) -> None:
 
 
 def intake_open(cfg: dict) -> bool:
-    """Baca kill switch; gagal baca / belum ada baris = TERBUKA."""
+    """Baca kill switch; gagal baca / belum ada baris = TERBUKA.
+
+    Fail-open ini HANYA untuk pemanggil lama; tampilan admin WAJIB
+    memakai _intake_open_state (Ronde 9, N8) supaya caption tidak
+    berbohong saat config tak terbaca."""
     return _config_value(cfg, "intake_open") != "0"
+
+
+def _intake_open_state(cfg: dict) -> str:
+    """Tri-state kill switch (Ronde 9, N8): 'open' / 'closed' /
+    'unknown'. 'unknown' bila baca app_config GAGAL — dibedakan dari
+    baris tak ada (= 'open', default lama). Satu-satunya pembeda:
+    kegagalan baca melempar, baris tak ada mengembalikan []."""
+    try:
+        rows = turso_execute(
+            cfg, "SELECT value FROM app_config WHERE key = ?",
+            ["intake_open"])
+    except Exception:
+        return "unknown"
+    if not rows:
+        return "open"
+    return "closed" if rows[0]["value"] == "0" else "open"
 
 
 def set_intake_open(cfg: dict, open_: bool) -> None:
@@ -952,8 +997,10 @@ def ocr_image_to_text(image_bytes: bytes) -> tuple[str, str]:
 # Ronde 8, M9: lacak memakai KODE ACAK per laporan, BUKAN nomor urut.
 # Nomor urut (1, 2, 3, …) bisa ditebak siapa pun tanpa bukti
 # kepemilikan — label hasil pemeriksaan orang lain bisa dienumerasi.
-# Kode dibuat dari alfabet 32 karakter tanpa ambiguitas (tanpa 0/1/I/
-# L/O), 8 karakter = 40 bit; tebak acak praktis tidak mungkin, dan
+# Kode dibuat dari alfabet 31 karakter tanpa ambiguitas (tanpa 0/1/I/
+# L/O), 8 karakter = 39,63 bit (dikoreksi ronde 9, S1 dari angka lama:
+# alfabetnya 23 huruf + 8 digit = 31, bukan 32);
+# tebak acak praktis tidak mungkin, dan
 # kode TIDAK memberi akses ke isi laporan (hanya status + label).
 TRACK_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 TRACK_CODE_LEN = 8
@@ -1079,7 +1126,7 @@ def _open_dispute_sql() -> str:
         "AND a.id > l.id))")
 
 
-def gold_count(cfg: dict) -> int:
+def gold_count(cfg: dict) -> int | None:
     """Jumlah laporan terverifikasi yang labelnya DISEPAKATI tinjauan
     kedua — ukuran KESEPAKATAN dua peninjau, BUKAN bukti label benar
     (Ronde 7, M4: label "subset emas / paling tepercaya" dulu melebihi
@@ -1089,7 +1136,12 @@ def gold_count(cfg: dict) -> int:
     Ronde 8, M2: "disepakati" mensyaratkan TIDAK ADA sengketa
     terbuka (satu tinjauan cocok + satu berbeda = BUKAN disepakati)
     dan TIDAK ADA putusan 'diragukan' — label yang diragukan bukan
-    label yang disepakati, walau pernah ada tinjauan yang cocok."""
+    label yang disepakati, walau pernah ada tinjauan yang cocok.
+
+    Ronde 9, S7: kembalikan None (bukan 0) bila hitung GAGAL —
+    0 adalah klaim tata kelola korpus, "gagal dihitung" bukan 0.
+    Pemanggil (analytics_snapshot / UI) WAJIB menampilkan
+    "tidak tersedia", bukan angka."""
     try:
         return turso_execute(
             cfg,
@@ -1103,15 +1155,17 @@ def gold_count(cfg: dict) -> int:
             "AND a.label = 'diragukan')"
         )[0]["n"]
     except Exception:
-        return 0
+        return None
 
 
-def disputed_count(cfg: dict) -> int:
+def disputed_count(cfg: dict) -> int | None:
     """Laporan terverifikasi yang tinjauan keduanya BERBEDA dari label
     tercatat dan BELUM diadjudikasi (Ronde 7, M4) — menunggu keputusan
     peninjau utama; label korpus belum berubah sampai diputuskan.
     Ronde 8, S1: sengketa yang masuk sesudah adjudikasi terakhir
-    membuka lagi antrean (lihat _open_dispute_sql)."""
+    membuka lagi antrean (lihat _open_dispute_sql).
+
+    Ronde 9, S7: None bila hitung gagal (bukan 0) — lihat gold_count."""
     try:
         return turso_execute(
             cfg,
@@ -1119,7 +1173,7 @@ def disputed_count(cfg: dict) -> int:
             "WHERE r.status = 'verified' AND " + _open_dispute_sql()
         )[0]["n"]
     except Exception:
-        return 0
+        return None
 
 
 def fetch_disputed(cfg: dict, limit: int = 10) -> list:
@@ -1151,6 +1205,15 @@ def adjudicate_report(cfg: dict, report_id: int, putusan: str,
     (Ronde 8, S1 — sukses tanpa jejak dilarang), atau bila migrasi
     0002 belum diterapkan untuk putusan 'diragukan' (Ronde 8, M2 —
     putusan tanpa efek korpus dilarang; gagal JUJUR, bukan diam-diam).
+
+    Ronde 9, G1 — eksklusi PERMANEN (keputusan desain, 3-suara:
+    DeepSeek + induk vs Terra): putusan 'diragukan' mengeluarkan
+    baris dari korpus SELAMANYA. 'Pertahankan' sesudahnya menutup
+    sengketa tetapi TIDAK mengembalikan corpus_excluded=0 — sekali
+    diragukan, tetap keluar korpus (fail-closed untuk integritas
+    korpus; jejak 'diragukan' tetap di label_log, dan gold_count
+    juga permanen mengecualikan baris itu — memulihkan kolomnya
+    saja akan membuat corpus_export dan gold_count tidak konsisten).
     """
     if putusan not in ("pertahankan", "diragukan"):
         return False
@@ -1244,14 +1307,20 @@ def second_review(cfg: dict, report_id: int, label: str,
     peninjau), 'beda' (dicatat sebagai perbedaan; label asli TIDAK
     diubah — mengubah label adalah keputusan peninjau utama, lewat
     adjudikasi; lihat adjudicate_report), atau 'hilang' (baris
-    tidak lagi terverifikasi). `actor` dicatat di label_log supaya
-    peninjau pertama dan kedua bisa dibedakan (Ronde 6, S5)."""
+    tidak lagi terverifikasi). Ronde 9, S3 (GG-33): 'gagal-catat'
+    bila jejak audit gagal tertulis — UI WAJIB menampilkan kegagalan
+    itu, bukan mengklaim tinjauan "dicatat di label_log". `actor`
+    dicatat di label_log supaya peninjau pertama dan kedua bisa
+    dibedakan (Ronde 6, S5)."""
     rows = turso_execute(
         cfg, "SELECT label FROM reports WHERE id = ? "
              "AND status = 'verified'", [int(report_id)])
     if not rows:
         return "hilang"
-    _log_label(cfg, report_id, "tinjauan_kedua", label, actor=actor)
+    logged = _log_label_checked(cfg, report_id, "tinjauan_kedua",
+                                label, actor=actor)
+    if logged is None:
+        return "gagal-catat"
     return "cocok" if rows[0]["label"] == label else "beda"
 
 
@@ -1371,12 +1440,19 @@ def submit_report(cfg: dict, *, channel: str, raw_text: str,
 
 
 def fetch_gallery(cfg: dict, limit: int = 30) -> list:
-    """Laporan terverifikasi yang boleh tampil di galeri publik."""
+    """Laporan terverifikasi yang boleh tampil di galeri publik.
+
+    Ronde 9, S9 (GG-36, sisi baca): galeri HANYA terverifikasi +
+    gallery_visible=1 + consent_data_use=1 — pertahanan kedua di
+    samping penolakan tulis di set_gallery_visible / verify_report,
+    supaya baris tanpa consent tak pernah tampil walau flag-nya
+    sempat menyala (mis. data lama pra-R9)."""
     return turso_execute(
         cfg,
         "SELECT id, created_at, verified_at, category_modus, "
         "text_scrubbed, model_band FROM reports "
         "WHERE status = 'verified' AND gallery_visible = 1 "
+        "AND consent_data_use = 1 "
         "ORDER BY verified_at DESC LIMIT ?",
         [int(limit)])
 
@@ -1442,6 +1518,21 @@ def fmt_wita(utc_text: str | None) -> str:
         return dt.astimezone(WITA).strftime("%d-%m-%Y %H:%M WITA")
     except ValueError:
         return utc_text
+
+
+# --- Provenance OCR (Ronde 8, S6; diperketat Ronde 9, N4/GG-38) --------
+def _ocr_provenance_applies(flag: bool, current_text: str,
+                            ocr_source: str | None) -> bool:
+    """True bila teks saat ini MASIH teks hasil OCR.
+
+    Provenance via_ocr mengikuti isi TERKINI: bila warga mengubah
+    teks sesudah "Pakai teks ini", flag gugur — laporan yang
+    diketik manual tidak boleh tersimpan sebagai via_ocr=1.
+    Perbandingan sesudah strip (spasi tepi bukan perubahan isi);
+    tanpa flag / tanpa sumber tersimpan -> False."""
+    if not flag or ocr_source is None:
+        return False
+    return (current_text or "").strip() == (ocr_source or "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -1674,17 +1765,29 @@ def _render_track_expander(cfg: dict, db_ready: bool) -> None:
             else:
                 try:
                     row = fetch_report_by_code(cfg, code)
-                except Exception as exc:
-                    st.error(f"Status belum bisa dimuat: {exc}")
+                    st.session_state["sk_track_error"] = False
+                except Exception:
+                    # Ronde 9, N5: pesan generik (tanpa detail internal
+                    # "turso error: ..." mentah) + tandai galat supaya
+                    # "tidak ditemukan" di bawah tidak tampil untuk
+                    # jalur galat — klaim itu salah saat basis data
+                    # yang gagal, bukan kodenya yang salah.
+                    st.error("Status belum bisa dimuat saat ini — "
+                             "coba lagi nanti.")
                     row = None
+                    st.session_state["sk_track_error"] = True
                 st.session_state["sk_track_row"] = row
                 st.session_state["sk_track_for"] = (code or "").strip()
         row = st.session_state.get("sk_track_row")
         if row is None and st.session_state.get("sk_track_for"):
-            st.warning(
-                "Kode lacak tidak ditemukan. Periksa lagi kodenya — "
-                "atau laporan mungkin sudah dihapus atas permintaan "
-                "pelapor (hak hapus).")
+            if st.session_state.get("sk_track_error"):
+                pass  # galat sudah ditampilkan di atas; jangan klaim
+                # "tidak ditemukan" untuk kegagalan basis data.
+            else:
+                st.warning(
+                    "Kode lacak tidak ditemukan. Periksa lagi kodenya — "
+                    "atau laporan mungkin sudah dihapus atas permintaan "
+                    "pelapor (hak hapus).")
         elif row is not None:
             if row["status"] == "deleted":
                 st.warning(
@@ -1823,8 +1926,12 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
                 # Ronde 8, S6: tandai asal teks (provenance OCR) —
                 # disimpan sebagai via_ocr di basis data dan ditampilkan
                 # di kartu peninjau supaya salah baca OCR bisa
-                # dipertimbangkan sebelum memberi label.
+                # dipertimbangkan sebelum memberi label. Ronde 9, N4:
+                # simpan JUGA teks sumbernya — via_ocr hanya berlaku
+                # bila teks saat submit masih sama dengan sumber ini
+                # (lihat _ocr_provenance_applies).
                 st.session_state["sk_text_via_ocr"] = True
+                st.session_state["sk_text_ocr_source"] = ocr_edited
                 st.session_state.pop("sk_ocr_text", None)
                 st.rerun()
     text = st.text_area(
@@ -1868,7 +1975,12 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
             # BOLEH SIMPAN. Hasil CEK tetap diberikan; yang ditahan
             # hanya penyimpanannya.
             sender_raw = (sender or "").strip() or None
-            via_ocr = bool(st.session_state.get("sk_text_via_ocr"))
+            # Ronde 9, N4 (GG-38): via_ocr hanya bila teks saat ini
+            # masih teks hasil OCR — bila warga mengetik ulang isinya
+            # sesudah "Pakai teks ini", provenance gugur.
+            via_ocr = _ocr_provenance_applies(
+                bool(st.session_state.get("sk_text_via_ocr")), raw,
+                st.session_state.get("sk_text_ocr_source"))
             can_store, block_reason = check_storage_gate(
                 cfg, db_ready=db_ready, intake_open=intake_is_open,
                 queue_full=queue_full, intake_unknown=intake_unknown,
@@ -1908,8 +2020,13 @@ def render_lapor_tab(engine, analyze_one, card_html) -> None:
                     st.session_state["sk_ts_nonce"] = \
                         st.session_state.get("sk_ts_nonce", 0) + 1
                     st.session_state.pop("sk_text_via_ocr", None)
-                except Exception as exc:
-                    st.error(f"Laporan gagal tersimpan: {exc}")
+                    st.session_state.pop("sk_text_ocr_source", None)
+                except Exception:
+                    # Ronde 9, N5: jangan bocorkan detail internal
+                    # ("turso error: ..." mentah) ke warga.
+                    st.error("Laporan gagal tersimpan — coba lagi "
+                             "nanti. Bila berulang, sampaikan waktu "
+                             "pengiriman kepada pengelola.")
             elif db_ready:
                 st.info(
                     "Hasil cek tampil di bawah, tetapi laporan ini "
@@ -2264,7 +2381,27 @@ def verify_report(cfg: dict, report_id: int, label: str, category: str,
     koordinator. INSERT log tetap memakai guard WHERE EXISTS atas
     baris yang BARU terverifikasi, jadi bila UPDATE tidak mengenai
     baris apa pun (laporan sudah tidak pending — mis. klik ganda /
-    sudah diproses peninjau lain), TIDAK ADA jejak yang tertulis."""
+    sudah diproses peninjau lain), TIDAK ADA jejak yang tertulis.
+
+    Ronde 9, S9 (GG-36, sisi tulis — 3-suara unanimous): galeri
+    HANYA untuk laporan dengan consent. Bila gallery_visible=True
+    diminta atas laporan consent_data_use=0, galeri DIPAKSA 0
+    (koersi terdokumentasi — verifikasi tetap sukses; menggagalkan
+    verifikasi seluruhnya karena centang galeri akan menghukum
+    label yang sah). Bila baca consent gagal, koersi yang sama
+    berlaku (fail-closed untuk galeri)."""
+    # Ronde 9, S9: baca consent dulu; gagal baca = tanpa consent.
+    try:
+        _cons_rows = turso_execute(
+            cfg,
+            "SELECT consent_data_use FROM reports WHERE id = ?",
+            [int(report_id)])
+        _has_consent = bool(_cons_rows
+                            and _cons_rows[0]["consent_data_use"])
+    except Exception:
+        _has_consent = False
+    if gallery_visible and not _has_consent:
+        gallery_visible = False
     first = frozen_label(cfg, report_id)
     pre_label = first
     if first is None:
@@ -2363,26 +2500,76 @@ def verify_report(cfg: dict, report_id: int, label: str, category: str,
     return label
 
 
-def reject_report(cfg: dict, report_id: int) -> None:
-    turso_execute(
-        cfg,
-        "UPDATE reports SET status = 'rejected', "
-        "verified_at = datetime('now') WHERE id = ? AND status = 'pending'",
-        [int(report_id)])
-    _log_label(cfg, report_id, "tolak")
+def reject_report(cfg: dict, report_id: int) -> bool:
+    """Tolak laporan pending. Ronde 9, S5 (GG-33): kembalikan True
+    HANYA bila UPDATE mengenai baris DAN jejak 'tolak' tertulis —
+    bila laporan sudah tidak pending (0 baris) atau jejak gagal,
+    kembalikan False TANPA jejak palsu; bila jejak gagal sesudah
+    UPDATE berhasil, status dikembalikan ke pending (kompensasi)."""
+    try:
+        upd = turso_execute(
+            cfg,
+            "UPDATE reports SET status = 'rejected', "
+            "verified_at = datetime('now') WHERE id = ? "
+            "AND status = 'pending' RETURNING id",
+            [int(report_id)])
+    except Exception:
+        return False
+    if not upd:
+        return False
+    if _log_label_checked(cfg, report_id, "tolak") is None:
+        try:
+            turso_execute(
+                cfg,
+                "UPDATE reports SET status = 'pending', "
+                "verified_at = NULL WHERE id = ?",
+                [int(report_id)])
+        except Exception:
+            pass
+        return False
+    return True
 
 
-def delete_report(cfg: dict, report_id: int) -> None:
-    """Hapus lunak (hak hapus): baris keluar dari galeri & korpus."""
-    turso_execute(
-        cfg,
-        "UPDATE reports SET status = 'deleted', gallery_visible = 0 "
-        "WHERE id = ?",
-        [int(report_id)])
-    _log_label(cfg, report_id, "hapus")
+def delete_report(cfg: dict, report_id: int) -> bool:
+    """Hapus lunak (hak hapus): baris keluar dari galeri & korpus.
+    Ronde 9, S5 (GG-33): True hanya bila baris ada (RETURNING id)
+    DAN jejak 'hapus' tertulis; bila jejak gagal, status + galeri
+    dikembalikan ke keadaan sebelumnya (kompensasi)."""
+    try:
+        rows = turso_execute(
+            cfg,
+            "SELECT status, gallery_visible FROM reports WHERE id = ?",
+            [int(report_id)])
+    except Exception:
+        return False
+    if not rows:
+        return False
+    _prev_status = rows[0]["status"]
+    _prev_gal = rows[0]["gallery_visible"]
+    try:
+        upd = turso_execute(
+            cfg,
+            "UPDATE reports SET status = 'deleted', gallery_visible = 0 "
+            "WHERE id = ? RETURNING id",
+            [int(report_id)])
+    except Exception:
+        return False
+    if not upd:
+        return False
+    if _log_label_checked(cfg, report_id, "hapus") is None:
+        try:
+            turso_execute(
+                cfg,
+                "UPDATE reports SET status = ?, gallery_visible = ? "
+                "WHERE id = ?",
+                [_prev_status, _prev_gal, int(report_id)])
+        except Exception:
+            pass
+        return False
+    return True
 
 
-def unverify_report(cfg: dict, report_id: int) -> None:
+def unverify_report(cfg: dict, report_id: int) -> bool:
     """Kembalikan laporan terverifikasi ke antrean pending.
 
     Label TIDAK dihapus (Ronde 6, M2): label pertama dibekukan
@@ -2391,29 +2578,96 @@ def unverify_report(cfg: dict, report_id: int) -> None:
     menjadi label korpus. Baris kembali pending dengan label
     pertamanya tetap tersimpan (tidak tampil di kartu pending);
     verifikasi ulang tidak menimpa label itu — revisinya dicatat
-    terpisah di label_log ('revisi_pasca_paparan')."""
+    terpisah di label_log ('revisi_pasca_paparan').
+
+    Ronde 9, S5 (GG-33): True hanya bila baris terverifikasi (SELECT
+    label gagal / 0 baris -> False, tanpa UPDATE buta) DAN UPDATE
+    mengenai baris DAN jejak 'kembalikan' tertulis; bila jejak
+    gagal, status/verified_at/galeri dikembalikan (kompensasi)."""
     try:
         rows = turso_execute(
-            cfg, "SELECT label FROM reports WHERE id = ? "
-                 "AND status = 'verified'", [int(report_id)])
-        label = rows[0]["label"] if rows else None
+            cfg, "SELECT label, verified_at, gallery_visible "
+                 "FROM reports WHERE id = ? AND status = 'verified'",
+            [int(report_id)])
     except Exception:
-        label = None
-    turso_execute(
-        cfg,
-        "UPDATE reports SET status = 'pending', "
-        "verified_at = NULL, gallery_visible = 0 "
-        "WHERE id = ? AND status = 'verified'",
-        [int(report_id)])
-    _log_label(cfg, report_id, "kembalikan", label)
+        return False
+    if not rows:
+        return False
+    label = rows[0]["label"]
+    _prev_verified = rows[0]["verified_at"]
+    _prev_gal = rows[0]["gallery_visible"]
+    try:
+        upd = turso_execute(
+            cfg,
+            "UPDATE reports SET status = 'pending', "
+            "verified_at = NULL, gallery_visible = 0 "
+            "WHERE id = ? AND status = 'verified' RETURNING id",
+            [int(report_id)])
+    except Exception:
+        return False
+    if not upd:
+        return False
+    if _log_label_checked(cfg, report_id, "kembalikan",
+                          label) is None:
+        try:
+            turso_execute(
+                cfg,
+                "UPDATE reports SET status = 'verified', "
+                "verified_at = ?, gallery_visible = ? WHERE id = ?",
+                [_prev_verified, _prev_gal, int(report_id)])
+        except Exception:
+            pass
+        return False
+    return True
 
 
-def set_gallery_visible(cfg: dict, report_id: int, visible: bool) -> None:
-    turso_execute(
-        cfg,
-        "UPDATE reports SET gallery_visible = ? "
-        "WHERE id = ? AND status = 'verified'",
-        [1 if visible else 0, int(report_id)])
+def set_gallery_visible(cfg: dict, report_id: int, visible: bool) -> bool:
+    """Nyalakan/matikan tampil galeri untuk satu laporan terverifikasi.
+
+    Ronde 9, S9 (GG-36): visible=True DITOLAK (False) bila laporan
+    tanpa consent (consent_data_use=0) — galeri hanya untuk
+    terverifikasi + consent. Ronde 9, N7 (GG-33): perubahan galeri
+    WAJIB masuk jejak audit (aksi 'galeri', label 'tampil' /
+    'sembunyi'); bila jejak gagal tertulis, nilai dikembalikan dan
+    kembalikan False. False juga bila baris tak ada / tak
+    terverifikasi / tulis gagal."""
+    try:
+        rows = turso_execute(
+            cfg,
+            "SELECT status, consent_data_use, gallery_visible "
+            "FROM reports WHERE id = ?",
+            [int(report_id)])
+    except Exception:
+        return False
+    if not rows:
+        return False
+    row = rows[0]
+    if row["status"] != "verified":
+        return False
+    if visible and not row["consent_data_use"]:
+        return False
+    prev = row["gallery_visible"]
+    try:
+        upd = turso_execute(
+            cfg,
+            "UPDATE reports SET gallery_visible = ? "
+            "WHERE id = ? AND status = 'verified' RETURNING id",
+            [1 if visible else 0, int(report_id)])
+    except Exception:
+        return False
+    if not upd:
+        return False
+    if _log_label_checked(cfg, report_id, "galeri",
+                          "tampil" if visible else "sembunyi") is None:
+        try:
+            turso_execute(
+                cfg,
+                "UPDATE reports SET gallery_visible = ? WHERE id = ?",
+                [prev, int(report_id)])
+        except Exception:
+            pass
+        return False
+    return True
 
 
 def analytics_snapshot(cfg: dict) -> dict:
@@ -2544,16 +2798,29 @@ def _render_analytics(cfg: dict) -> None:
     # bukan bukti label benar ("paling tepercaya" dulu melebihi yang
     # diukur). Perbedaan tinjauan kedua ditampilkan terpisah sebagai
     # antrean adjudikasi, bukan disembunyikan.
-    st.caption(f"🥇 Disepakati dua peninjau: **{s.get('gold', 0)}** laporan — "
+    # Ronde 9, S7: gold/disputed None = "gagal dihitung", bukan 0.
+    # Tampilkan "tidak tersedia" — angka 0 di sini adalah klaim
+    # tata kelola korpus yang salah bila hitungnya gagal.
+    _gold = s.get("gold")
+    _disputed = s.get("disputed")
+    if _gold is None or _disputed is None:
+        st.caption("⚠️ Hitungan disepakati dua peninjau / menunggu "
+                   "adjudikasi tidak tersedia saat ini (basis data "
+                   "tidak menjawab) — jangan baca angka 0 di bawah "
+                   "sebagai hitungan.")
+    st.caption(f"🥇 Disepakati dua peninjau: **{_gold if _gold is not None else 'tidak tersedia'}** laporan — "
                "terverifikasi DAN tinjauan kedua memberi label yang sama. "
                "Ini ukuran kesepakatan dua peninjau, bukan bukti label "
                "benar: bila kedua peninjau keliru sama, baris itu tetap "
                "masuk hitungan.")
-    if s.get("disputed"):
-        st.caption(f"⚖️ {s['disputed']} laporan menunggu adjudikasi — "
+    if _disputed:
+        st.caption(f"⚖️ {_disputed} laporan menunggu adjudikasi — "
                    "tinjauan kedua berbeda dari label tercatat; label "
                    "korpus belum berubah sampai peninjau utama "
                    "memutuskan di bagian tinjauan kedua di bawah.")
+    elif _disputed is None:
+        st.caption("⚠️ Jumlah laporan menunggu adjudikasi tidak "
+                   "tersedia saat ini (basis data tidak menjawab).")
     c1, c2 = st.columns(2)
     with c1:
         st.caption("Laporan per hari (14 hari terakhir)")
@@ -2583,10 +2850,10 @@ def _render_analytics(cfg: dict) -> None:
         "tidak bisa menghitung penontonnya sendiri secara akurat. "
         "Statistik penonton ada di dashboard Streamlit Cloud pemilik "
         "app. Panel ini mencakup SEMUA laporan (termasuk yang masih "
-        "menunggu verifikasi) — KECUALI distribusi band model dan "
-        "progres korpus di atas, yang hanya atas laporan terverifikasi "
-        "(band laporan pending tidak ditampilkan di mana pun sebelum "
-        "pelabelan).")
+        "menunggu verifikasi) — KECUALI distribusi band model, "
+        "kategori modus teratas, dan progres korpus di atas, yang hanya "
+        "atas laporan terverifikasi (band laporan pending tidak "
+        "ditampilkan di mana pun sebelum pelabelan).")
 
 
 def _report_meta(cfg: dict, r: dict, blind: bool = False) -> str:
@@ -2670,14 +2937,27 @@ def render_admin_tab() -> None:
     m2.metric("Sudah terverifikasi", n_verified)
     m3.metric("Baris korpus (corpus_export)", n_corpus)
     # Kill switch intake (Fase 2.5) — juga bisa dibalik langsung di
-    # basis data oleh pengelola sebagai jalur darurat.
-    intake_now = intake_open(cfg)
+    # basis data oleh pengelola sebagai jalur darurat. Ronde 9, N8:
+    # caption memakai tri-state — bila baca config GAGAL, tampilkan
+    # "tidak dapat dipastikan" + sembunyikan tombol flip (jangan
+    # flip buta atas status yang salah).
+    intake_state = _intake_open_state(cfg)
+    intake_now = intake_state == "open"
     ic1, ic2 = st.columns([3, 1])
-    ic1.caption(
-        "Penerimaan laporan (intake): **TERBUKA**" if intake_now
-        else "Penerimaan laporan (intake): **DITUTUP** — warga hanya "
-             "bisa cek, laporan tidak tersimpan.")
-    if intake_now:
+    if intake_state == "unknown":
+        ic1.caption(
+            "Penerimaan laporan (intake): **tidak dapat dipastikan** "
+            "— basis data tidak menjawab; jangan ubah saklar sampai "
+            "status terbaca.")
+    elif intake_now:
+        ic1.caption("Penerimaan laporan (intake): **TERBUKA**")
+    else:
+        ic1.caption(
+            "Penerimaan laporan (intake): **DITUTUP** — warga hanya "
+            "bisa cek, laporan tidak tersimpan.")
+    if intake_state == "unknown":
+        pass  # tanpa tombol sampai status terbaca
+    elif intake_now:
         if ic2.button("🔴 Tutup intake", key="btn_intake_close"):
             set_intake_open(cfg, False)
             st.rerun()
@@ -2796,14 +3076,22 @@ def render_admin_tab() -> None:
                                    f"sebagai {label}.")
                         st.rerun()
             if b2.button("❌ Tolak", key=f"adm_reject_{r['id']}"):
-                reject_report(cfg, r["id"])
-                st.success(f"Laporan #{r['id']} ditolak.")
-                st.rerun()
+                if reject_report(cfg, r["id"]):
+                    st.success(f"Laporan #{r['id']} ditolak.")
+                    st.rerun()
+                else:
+                    st.error(f"Penolakan gagal: Laporan #{r['id']} "
+                             "sudah tidak pending atau jejak audit "
+                             "gagal tersimpan — coba lagi.")
             if b3.button("🗑️ Hapus", key=f"adm_delete_{r['id']}"):
-                delete_report(cfg, r["id"])
-                st.success(f"Laporan #{r['id']} dihapus (status "
-                           f"deleted).")
-                st.rerun()
+                if delete_report(cfg, r["id"]):
+                    st.success(f"Laporan #{r['id']} dihapus (status "
+                               f"deleted).")
+                    st.rerun()
+                else:
+                    st.error(f"Penghapusan gagal: Laporan #{r['id']} "
+                             "tidak dapat dihapus atau jejak audit "
+                             "gagal tersimpan — coba lagi.")
 
     # Antrean triase (Ronde 6, M1; dikunci teknis Ronde 7, M3) —
     # peringatan prosedural ("JANGAN dibuka sebelum selesai melabeli")
@@ -2869,20 +3157,42 @@ def render_admin_tab() -> None:
             if r["gallery_visible"]:
                 if b1.button("🙈 Sembunyikan dari galeri",
                              key=f"adm_hide_{r['id']}"):
-                    set_gallery_visible(cfg, r["id"], False)
-                    st.rerun()
+                    if set_gallery_visible(cfg, r["id"], False):
+                        st.success(f"Laporan #{r['id']} disembunyikan "
+                                   "dari galeri.")
+                        st.rerun()
+                    else:
+                        st.error(f"Galeri gagal: Laporan #{r['id']} "
+                                 "tidak dapat disembunyikan — jejak "
+                                 "audit gagal tersimpan atau laporan "
+                                 "sudah tidak terverifikasi.")
             else:
                 if b1.button("👁️ Tampilkan di galeri",
                              key=f"adm_show_{r['id']}"):
-                    set_gallery_visible(cfg, r["id"], True)
-                    st.rerun()
+                    if set_gallery_visible(cfg, r["id"], True):
+                        st.success(f"Laporan #{r['id']} ditampilkan "
+                                   "di galeri.")
+                        st.rerun()
+                    else:
+                        st.error(f"Galeri gagal: Laporan #{r['id']} "
+                                 "tidak dapat ditampilkan — periksa "
+                                 "persetujuan data (consent) laporan "
+                                 "ini, atau coba lagi.")
             if b2.button("↩️ Kembalikan ke antrean",
                          key=f"adm_unverify_{r['id']}"):
-                unverify_report(cfg, r["id"])
-                st.rerun()
+                if unverify_report(cfg, r["id"]):
+                    st.rerun()
+                else:
+                    st.error(f"Pengembalian gagal: Laporan #{r['id']} "
+                             "sudah tidak terverifikasi atau jejak "
+                             "audit gagal tersimpan — coba lagi.")
             if b3.button("🗑️ Hapus", key=f"adm_vdelete_{r['id']}"):
-                delete_report(cfg, r["id"])
-                st.rerun()
+                if delete_report(cfg, r["id"]):
+                    st.rerun()
+                else:
+                    st.error(f"Penghapusan gagal: Laporan #{r['id']} "
+                             "tidak dapat dihapus atau jejak audit "
+                             "gagal tersimpan — coba lagi.")
 
     # Tinjauan kedua (v6.0) — pertahanan mutu korpus. Sampel ACAK
     # laporan terverifikasi dinilai ulang TANPA melihat label tercatat
@@ -2903,9 +3213,11 @@ def render_admin_tab() -> None:
     # tinjauan kedua sebaiknya dilakukan peninjau yang berbeda dari
     # peninjau pertama.
     st.markdown("#### 🥇 Disepakati dua peninjau — tinjauan kedua")
+    _gold_now = gold_count(cfg)
     st.caption(
-        f"Disepakati dua peninjau saat ini: **{gold_count(cfg)}** "
-        "laporan. "
+        "Disepakati dua peninjau saat ini: **"
+        f"{_gold_now if _gold_now is not None else 'tidak tersedia'}"
+        "** laporan. "
         "Nilai ulang sampel acak di bawah ini dari teksnya saja — "
         "label tercatat sengaja tidak ditampilkan. Setiap tinjauan "
         "tercatat di jejak audit (label_log). Teks yang sama juga "
@@ -2951,15 +3263,24 @@ def render_admin_tab() -> None:
                         f"Laporan #{r['id']}: tinjauan kedua COCOK "
                         "dengan label tercatat — masuk hitungan "
                         "disepakati dua peninjau.")
+                    st.rerun()
                 elif hasil == "beda":
                     st.warning(
                         f"Laporan #{r['id']}: tinjauan kedua BERBEDA "
                         "dari label tercatat. Perbedaan dicatat di "
                         "label_log; label asli tidak berubah.")
+                    st.rerun()
+                elif hasil == "gagal-catat":
+                    # Ronde 9, S3: jangan rerun (pesan error hilang)
+                    # dan jangan hitung sebagai disepakati.
+                    st.error(
+                        f"Laporan #{r['id']}: tinjauan kedua GAGAL "
+                        "tercatat — jejak audit tidak tersimpan; "
+                        "coba lagi.")
                 else:
                     st.info(f"Laporan #{r['id']} sudah tidak "
                             "terverifikasi — tinjauan dibatalkan.")
-                st.rerun()
+                    st.rerun()
 
     # Adjudikasi (Ronde 7, M4): perbedaan tinjauan kedua tidak boleh
     # menggantung tanpa putusan. Peninjau utama memutuskan per laporan:
@@ -2983,13 +3304,35 @@ def render_admin_tab() -> None:
                 d1, d2 = st.columns(2)
                 if d1.button("✅ Pertahankan label beku",
                              key=f"adm_adj_keep_{r['id']}"):
-                    adjudicate_report(
+                    # Ronde 9, M1 (GG-18): tangkap hasil — kegagalan
+                    # adjudikasi WAJIB tampil, jangan rerun buta.
+                    _ok = adjudicate_report(
                         cfg, r["id"], "pertahankan",
                         actor=(reviewer2 or "").strip() or "verifikator")
-                    st.rerun()
+                    if _ok:
+                        st.success(f"Adjudikasi tersimpan: Laporan "
+                                   f"#{r['id']} dipertahankan.")
+                        st.rerun()
+                    else:
+                        st.error(f"Adjudikasi gagal: Laporan "
+                                 f"#{r['id']} tidak dapat diputuskan — "
+                                 "sengketa mungkin sudah ditutup atau "
+                                 "jejak audit gagal tersimpan; coba "
+                                 "lagi.")
                 if d2.button("⚠️ Tandai label diragukan",
                              key=f"adm_adj_doubt_{r['id']}"):
-                    adjudicate_report(
+                    _ok = adjudicate_report(
                         cfg, r["id"], "diragukan",
                         actor=(reviewer2 or "").strip() or "verifikator")
-                    st.rerun()
+                    if _ok:
+                        st.success(f"Adjudikasi tersimpan: Laporan "
+                                   f"#{r['id']} ditandai diragukan — "
+                                   "keluar dari korpus.")
+                        st.rerun()
+                    else:
+                        st.error(f"Adjudikasi gagal: Laporan "
+                                 f"#{r['id']} tidak dapat diputuskan — "
+                                 "sengketa mungkin sudah ditutup, "
+                                 "migrasi 0002 belum diterapkan, atau "
+                                 "jejak audit gagal tersimpan; coba "
+                                 "lagi.")

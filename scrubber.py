@@ -72,6 +72,16 @@ _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 #     (fragment membawa token pada OAuth implicit flow, mis.
 #     `#access_token=...`).
 #   * URL literal IPv4 (skema wajib) ikut ditangkap sebagai tautan.
+#   * Ronde 9, S2 (GG-11, kemunculan ke-3): PORT (`:8443`) dan
+#     USERINFO (`user:pass@`) juga bagian dari URL — cabang domain
+#     dulu berhenti di TLD sehingga `:8443/v?token=...` lolos utuh,
+#     dan `_url_sub` memotong host hanya di `[/?#]` sehingga
+#     `192.168.1.1:8080` gagal uji IPv4. Kini `(?::\d+)?` di kedua
+#     cabang + userinfo opsional sesudah skema + host dipotong juga
+#     di `:`/`@`. Email tetap didahulukan (langkah 1), tetapi
+#     `_email_sub` melewatkan kecocokan yang berada di dalam
+#     otoritas URL (`https://user:pass@...`) supaya URL utuh yang
+#     menang, bukan potongan emailnya.
 # Perlindungan false-positive tetap di callback `_url_sub` (host
 # WAJIB mengandung huruf — kecuali IPv4 — supaya "Rp50.000.000"
 # dan "3.14" tidak pernah terbaca sebagai domain). Batas desain yang
@@ -79,11 +89,11 @@ _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 # sebagai tautan — arah salah yang aman untuk scrubber PII (lebih
 # baik kelebihan menyaring daripada kebocoran token).
 _URL_RE = re.compile(
-    r"(?:https?://)(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?"
+    r"(?:https?://)(?:[^\s/@?#]+@)?(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?"
     r"(?:[/?#][^\s]*)?"
-    r"|(?:https?://)?(?:www\.)?"
+    r"|(?:https?://)?(?:[^\s/@?#]+@)?(?:www\.)?"
     r"(?:[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?\.)+"
-    r"[a-z]{2,}"
+    r"[a-z]{2,}(?::\d+)?"
     # Ronde 7, M1: ekor URL WAJIB menelan "?query" juga bila tanpa path
     # ("(?:[/?][^\s]*)?"). Pola lama "(?:/[^\s]*)?" hanya menelan query
     # bila didahului "/", sehingga "https://host?token=x" menyisakan
@@ -164,7 +174,15 @@ def scrub(text: str) -> tuple[str, list[str]]:
         return text, findings
 
     # 1) Email — lebih dulu, agar domain email tidak terbaca sebagai URL.
+    # Ronde 9, S2: KECUALI bila kecocokan email itu berada di dalam
+    # otoritas URL (`https://user:pass@evil.com/...`) — di sana yang
+    # berlaku adalah aturan URL (langkah 2, yang menelan userinfo +
+    # path/query utuh); bila email dimakan dulu, token di ekor URL
+    # lolos sebagai `https://user:[EMAIL]/x?token=1`.
     def _email_sub(_m: re.Match) -> str:
+        if re.search(r"https?://[^\s]*$",
+                     text[:_m.start()], flags=re.IGNORECASE):
+            return _m.group(0)  # bagian dari URL; biar langkah 2 yang urus
         note(FINDING_EMAIL)
         return _REPLACEMENT[FINDING_EMAIL]
 
@@ -177,10 +195,17 @@ def scrub(text: str) -> tuple[str, list[str]]:
         suffix = raw[len(core):]
         # Host = sampai "/" ATAU "?" ATAU "#" pertama (Ronde 7, M1:
         # query tanpa path kini ikut tercocok; Ronde 8, M1: fragment
-        # juga — host tidak boleh menelan "?…" atau "#…").
-        host = re.split(r"[/?#]", re.sub(
+        # juga — host tidak boleh menelan "?…" atau "#…"). Ronde 9,
+        # S2: potong JUGA di ":" (port) dan "@" (userinfo) — host
+        # `192.168.1.1:8080` atau `user:pass@evil.com` harus
+        # dikenali sebagai IPv4/domain-nya, bukan dikembalikan mentah.
+        # Urutan penting: "@" dulu (userinfo bisa mengandung ":"),
+        # baru ":" (port).
+        _no_scheme = re.sub(
             r"^(?:https?://)?(?:www\.)?", "", core,
-            flags=re.IGNORECASE))[0].lower()
+            flags=re.IGNORECASE)
+        host = re.split(
+            r"[/?#:]", _no_scheme.rsplit("@", 1)[-1])[0].lower()
         if not any(ch.isalpha() for ch in host) and not re.fullmatch(
                 r"(?:\d{1,3}\.){3}\d{1,3}", host):
             return raw  # bukan domain sungguhan; jangan sentuh
